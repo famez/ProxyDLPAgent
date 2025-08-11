@@ -1,4 +1,4 @@
-#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,10 +9,12 @@
 #include "windivert.h"
 
 #define MAXBUF          0xFFFF
-#define PROXY_IP        0xC0A8000F  // 192.168.0.15 in hex
+#define PROXY_IP        "192.168.0.15"
 #define PROXY_PORT      8080
 #define HTTP_PORT       80
 #define HTTPS_PORT      443
+
+#define VERBOSITY       3   // 0=silent, 1=events, 2=connections, 3=full packet details
 
 typedef struct {
     UINT32 orig_dst_ip;
@@ -31,6 +33,13 @@ int conn_count = 0;
 
 HANDLE handle;
 
+#define VPRINT(level, fmt, ...) \
+    do { \
+        if (VERBOSITY >= level) { \
+            fprintf(stderr, "[V%d] " fmt "\n", level, ##__VA_ARGS__); \
+        } \
+    } while (0)
+
 static void error(const char *msg) {
     fprintf(stderr, "%s\n", msg);
     exit(EXIT_FAILURE);
@@ -44,7 +53,38 @@ static UINT16 htons_u16(UINT16 hostshort) {
     return (hostshort >> 8) | (hostshort << 8);
 }
 
-// Find connection in table by original 4-tuple (src_ip, src_port, dst_ip, dst_port)
+static UINT32 ntohl_u32(UINT32 netlong) {
+    return ((netlong >> 24) & 0x000000FF) |
+           ((netlong >> 8)  & 0x0000FF00) |
+           ((netlong << 8)  & 0x00FF0000) |
+           ((netlong << 24) & 0xFF000000);
+}
+
+static UINT32 htonl_u32(UINT32 hostlong) {
+    return ((hostlong >> 24) & 0x000000FF) |
+           ((hostlong >> 8)  & 0x0000FF00) |
+           ((hostlong << 8)  & 0x00FF0000) |
+           ((hostlong << 24) & 0xFF000000);
+}
+
+
+static void print_ip_port(UINT32 ip, UINT16 port) {
+    unsigned char *bytes = (unsigned char *)&ip;
+    fprintf(stderr, "%u.%u.%u.%u:%u",
+        bytes[0], bytes[1], bytes[2], bytes[3], ntohs_u16(port));
+}
+
+static UINT32 ip_str_to_u32(const char *ip_str) {
+    UINT32 ip;
+    if (inet_pton(AF_INET, ip_str, &ip) != 1) {
+        fprintf(stderr, "Invalid IP string: %s\n", ip_str);
+        exit(EXIT_FAILURE);
+    }
+    return ip; // already in network byte order
+}
+
+
+// Find connection in table by original 4-tuple
 int find_conn_outbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
     for (int i = 0; i < conn_count; i++) {
         if (conn_table[i].orig_src_ip == src_ip &&
@@ -57,13 +97,13 @@ int find_conn_outbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst
     return -1;
 }
 
-// Find connection by proxy side 4-tuple (src_ip, src_port, dst_ip, dst_port)
+// Find connection by proxy side 4-tuple
 int find_conn_inbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
     for (int i = 0; i < conn_count; i++) {
-        if (conn_table[i].proxy_dst_ip == src_ip &&       // From proxy server
+        if (conn_table[i].proxy_dst_ip == src_ip &&
             conn_table[i].proxy_dst_port == src_port &&
             conn_table[i].orig_src_ip == dst_ip &&
-            conn_table[i].proxy_src_port == dst_port) {  // To client port
+            conn_table[i].proxy_src_port == dst_port) {
             return i;
         }
     }
@@ -71,7 +111,6 @@ int find_conn_inbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_
 }
 
 UINT16 get_unused_src_port() {
-    // For simplicity, pick random high ports (can be improved)
     return (UINT16)(1024 + (rand() % (65535 - 1024)));
 }
 
@@ -81,17 +120,19 @@ int main() {
 
     srand((unsigned int)time(NULL));
 
-    // Filter for outbound to HTTP/HTTPS OR inbound from proxy port
+    //UINT32 proxy_ip = ip_str_to_u32(PROXY_IP);
+
     r = snprintf(filter, sizeof(filter),
         "(outbound and tcp.DstPort == %d) or "
         "(outbound and tcp.DstPort == %d) or "
-        "(inbound and tcp.SrcPort == %d and ip.SrcAddr == %u)",
-        HTTP_PORT, HTTPS_PORT, PROXY_PORT, htonl(PROXY_IP));
-
+        "(inbound and tcp.SrcPort == %d and ip.SrcAddr == %s)",
+        HTTP_PORT, HTTPS_PORT, PROXY_PORT, PROXY_IP);
 
     if (r < 0 || r >= sizeof(filter)) {
         error("failed to create filter string");
     }
+
+    VPRINT(1, "Opening WinDivert with filter: %s", filter);
 
     handle = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
     if (handle == INVALID_HANDLE_VALUE) {
@@ -106,7 +147,6 @@ int main() {
     PWINDIVERT_TCPHDR tcp_header;
 
     while (1) {
-
         if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
             fprintf(stderr, "failed to read packet (%d)\n", GetLastError());
             continue;
@@ -119,16 +159,21 @@ int main() {
         }
 
         if (addr.Outbound) {
+            VPRINT(1, "Outbound packet intercepted");
+            if (VERBOSITY >= 3) {
+                fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+                fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+                fprintf(stderr, "\n");
+            }
 
-            int idx = find_conn_outbound(ip_header->SrcAddr, tcp_header->SrcPort, ip_header->DstAddr, tcp_header->DstPort);
-
+            int idx = find_conn_outbound(ip_header->SrcAddr, tcp_header->SrcPort,
+                                         ip_header->DstAddr, tcp_header->DstPort);
             conn_entry_t *entry;
 
             if (idx >= 0) {
-                // Connection tracked: use existing entry
                 entry = &conn_table[idx];
+                VPRINT(2, "Found existing connection entry");
             } else {
-                // Not tracked yet, create new entry
                 if (conn_count >= MAX_CONN) {
                     fprintf(stderr, "connection table full\n");
                     continue;
@@ -142,15 +187,31 @@ int main() {
                 entry->orig_dst_ip = ip_header->DstAddr;
                 entry->orig_dst_port = tcp_header->DstPort;
 
-                entry->proxy_dst_ip = PROXY_IP;
-                entry->proxy_dst_port = htons(PROXY_PORT);
-                entry->proxy_src_port = htons(new_src_port);
+                UINT32 proxy_ip = ip_str_to_u32(PROXY_IP);
+
+                entry->proxy_dst_ip = proxy_ip;
+                entry->proxy_dst_port = htons_u16(PROXY_PORT);
+                entry->proxy_src_port = htons_u16(new_src_port);
+
+                VPRINT(2, "Tracking new connection:");
+                if (VERBOSITY >= 2) {
+                    fprintf(stderr, "    Original: "); print_ip_port(entry->orig_src_ip, entry->orig_src_port);
+                    fprintf(stderr, " -> "); print_ip_port(entry->orig_dst_ip, entry->orig_dst_port);
+                    fprintf(stderr, "\n    Proxy: "); print_ip_port(entry->proxy_dst_ip, entry->proxy_dst_port);
+                    fprintf(stderr, " (src port remap to %u)\n", ntohs_u16(entry->proxy_src_port));
+                }
             }
 
-            // Rewrite packet (common for both new and tracked connections)
             ip_header->DstAddr = entry->proxy_dst_ip;
             tcp_header->DstPort = entry->proxy_dst_port;
             tcp_header->SrcPort = entry->proxy_src_port;
+
+            if (VERBOSITY >= 3) {
+                fprintf(stderr, "Rewriting outbound packet to:\n");
+                fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+                fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+                fprintf(stderr, "\n");
+            }
 
             WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0);
 
@@ -159,13 +220,17 @@ int main() {
             }
 
         } else {
+            VPRINT(1, "Inbound packet intercepted");
+            if (VERBOSITY >= 3) {
+                fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+                fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+                fprintf(stderr, "\n");
+            }
 
-            // Inbound packet, expected from proxy server to client
-            // We want to rewrite source IP/port back to original destination IP/port
-
-            int idx = find_conn_inbound(ip_header->SrcAddr, tcp_header->SrcPort, ip_header->DstAddr, tcp_header->DstPort);
+            int idx = find_conn_inbound(ip_header->SrcAddr, tcp_header->SrcPort,
+                                        ip_header->DstAddr, tcp_header->DstPort);
             if (idx < 0) {
-                // Not tracked, just forward
+                VPRINT(2, "No matching connection found, forwarding unchanged");
                 if (!WinDivertSend(handle, packet, packet_len, NULL, &addr)) {
                     fprintf(stderr, "failed to send inbound packet\n");
                 }
@@ -174,13 +239,17 @@ int main() {
 
             conn_entry_t *entry = &conn_table[idx];
 
-            // Rewrite source IP/port from proxy to original destination IP/port
             ip_header->SrcAddr = entry->orig_dst_ip;
             tcp_header->SrcPort = entry->orig_dst_port;
-
-            // Rewrite dest IP/port from proxy to original source IP/port
             ip_header->DstAddr = entry->orig_src_ip;
             tcp_header->DstPort = entry->orig_src_port;
+
+            if (VERBOSITY >= 3) {
+                fprintf(stderr, "Rewriting inbound packet to:\n");
+                fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+                fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+                fprintf(stderr, "\n");
+            }
 
             WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0);
 
