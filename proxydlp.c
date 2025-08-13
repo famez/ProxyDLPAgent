@@ -8,7 +8,7 @@
 
 #include "windivert.h"
 
-#include "dnslog.h"
+#include "dns.h"
 
 #define MAXBUF          0xFFFF
 #define PROXY_IP        "192.168.0.15"
@@ -96,11 +96,11 @@ UINT16 get_unused_src_port() {
 }
 
 UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header,
-    const PWINDIVERT_UDPHDR udp_header, UINT8 *packet, UINT packet_len) {
+    const PWINDIVERT_UDPHDR udp_header, UINT8 *packet, UINT packet_len, UINT8 payload[MAXBUF], UINT payload_len) {
 
     //Log DNS queries and responses.
     
-    fprintf(stderr, "Received UDP datagram... \n");
+    //fprintf(stderr, "Received UDP datagram... \n");
     
     /*
     if (addr->Outbound) {
@@ -113,13 +113,13 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
     if(addr->Outbound && ntohs(udp_header->DstPort) == DNS_PORT) {                 //DNS outbound queries
 
         fprintf(stderr, "Received DNS query --> \n");
-        dnslog_handle_packet(ip_header, udp_header);
+        dns_handle_packet(ip_header, udp_header, payload, payload_len);
         
 
     } else if (!addr->Outbound && ntohs(udp_header->SrcPort) == DNS_PORT) {        //DNS inbound answers
 
         fprintf(stderr, "Received DNS response <-- \n");
-        dnslog_handle_packet(ip_header, udp_header);
+        dns_handle_packet(ip_header, udp_header, payload, payload_len);
     }
 
 
@@ -278,6 +278,9 @@ int main() {
     PWINDIVERT_TCPHDR tcp_header;
     PWINDIVERT_UDPHDR udp_header;
 
+    UINT8 *payload;
+    UINT payload_len;
+
     while (1) {
         if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
             fprintf(stderr, "failed to read packet (%ld)\n", GetLastError());
@@ -285,7 +288,7 @@ int main() {
         }
 
         if (!WinDivertHelperParsePacket(packet, packet_len, &ip_header, NULL, NULL,
-                                        NULL, NULL, &tcp_header, &udp_header, NULL, NULL, NULL, NULL)) {
+                                        NULL, NULL, &tcp_header, &udp_header, (PVOID *)&payload, &payload_len, NULL, NULL)) {
             fprintf(stderr, "failed to parse packet\n");
             continue;
         }
@@ -295,7 +298,7 @@ int main() {
             /*UINT32 result =*/ handle_tcp_packet(&addr, ip_header, tcp_header, packet, packet_len);
 
         } else if (udp_header) {
-            /*UINT32 result =*/ handle_udp_packet(&addr, ip_header, udp_header, packet, packet_len);
+            /*UINT32 result =*/ handle_udp_packet(&addr, ip_header, udp_header, packet, packet_len, payload, payload_len);
         }
 
     }
