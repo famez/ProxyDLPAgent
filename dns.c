@@ -6,15 +6,34 @@
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
+#define MAX_IP_ADDRESSES 16   // max IPv4 addresses per hostname
+#define MAX_HOSTNAME_LEN 255
 
-struct dns_header {
+typedef struct dns_entry {
+    char hostname[MAX_HOSTNAME_LEN + 1];
+    uint32_t ipv4_addresses[MAX_IP_ADDRESSES];
+    int num_addresses;
+} dns_entry_t;
+
+#define MAX_DNS_ENTRIES 128
+
+typedef struct dns_table {
+    dns_entry_t entries[MAX_DNS_ENTRIES];
+    int num_entries;
+} dns_table_t;
+
+
+typedef struct dns_header {
     uint16_t id;
     uint16_t flags;
     uint16_t qdcount;
     uint16_t ancount;
     uint16_t nscount;
     uint16_t arcount;
-};
+} dns_header_t;
+
+static dns_table_t g_dns_table = { .num_entries = 0 };
+
 
 static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
                                      size_t payload_len, char *out,
@@ -55,7 +74,7 @@ static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
 }
 
 static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
-                                       size_t payload_len) {
+                                       size_t payload_len, dns_table_t *table) {
     char name[MAX_DNS_NAME_LEN + 1];
     const uint8_t *new_ptr = read_name_safe(ptr, base, payload_len, name, 0);
     if (!new_ptr) return NULL;
@@ -65,33 +84,30 @@ static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
     if (remaining < 10) return NULL; // type(2) + class(2) + ttl(4) + rdlen(2)
 
     uint16_t type = ntohs(*(uint16_t*)ptr); ptr += 2;
-    uint16_t class = ntohs(*(uint16_t*)ptr); ptr += 2;
-    uint32_t ttl = ntohl(*(uint32_t*)ptr); ptr += 4;
+    //uint16_t class = ntohs(*(uint16_t*)ptr); ptr += 2;
+    //uint32_t ttl = ntohl(*(uint32_t*)ptr); ptr += 4;
     uint16_t rdlength = ntohs(*(uint16_t*)ptr); ptr += 2;
 
     if ((size_t)(ptr - base) + rdlength > payload_len) return NULL;
 
-    printf("Name: %s, Type: %u, Class: %u, TTL: %u, RDLENGTH: %u\n",
-           name, type, class, ttl, rdlength);
-
-    if (type == 1 && rdlength == 4) { // A
-        printf("A: %u.%u.%u.%u\n", ptr[0], ptr[1], ptr[2], ptr[3]);
-    } else if (type == 28 && rdlength == 16) { // AAAA
-        char addr[40];
-        snprintf(addr, sizeof(addr),
-                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
-                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
-                 ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5], ptr[6], ptr[7],
-                 ptr[8], ptr[9], ptr[10], ptr[11], ptr[12], ptr[13], ptr[14], ptr[15]);
-        printf("AAAA: %s\n", addr);
-    } else if (type == 5) { // CNAME
-        char cname[MAX_DNS_NAME_LEN + 1];
-        if (!read_name_safe(ptr, base, payload_len, cname, 0)) return NULL;
-        printf("CNAME: %s\n", cname);
-    }
+    if (type == 1 && rdlength == 4) { // A record
+        fprintf(stderr, "A: %u.%u.%u.%u\n", ptr[0], ptr[1], ptr[2], ptr[3]);
+        if (table->num_entries < MAX_DNS_ENTRIES) {
+            dns_entry_t *entry = &table->entries[table->num_entries];
+             // safely copy hostname
+            size_t len = strnlen(name, MAX_HOSTNAME_LEN);
+            memcpy(entry->hostname, name, len);
+            entry->hostname[len] = '\0';
+            entry->ipv4_addresses[0] = *(uint32_t*)ptr;  // store in network order
+            entry->num_addresses = 1;
+            table->num_entries++;
+        }
+    } 
+    // handle CNAME or AAAA similarly if needed
 
     return ptr + rdlength;
 }
+
 
 
 void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR udp_header,
@@ -128,11 +144,12 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
 
     // Answers
     for (int i = 0; i < ntohs(hdr->ancount); i++) {
-        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
+        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len, &g_dns_table);
         if (!new_ptr) return;
         ptr = new_ptr;
     }
 
+    /*
     // Authority
     for (int i = 0; i < ntohs(hdr->nscount); i++) {
         const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
@@ -146,4 +163,6 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
         if (!new_ptr) return;
         ptr = new_ptr;
     }
+    */
+
 }
