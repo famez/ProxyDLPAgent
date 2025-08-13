@@ -4,6 +4,9 @@
 
 #include "windivert.h"
 
+#define MAX_DNS_NAME_LEN     255
+#define MAX_DNS_RECURSION    10
+
 struct dns_header {
     uint16_t id;
     uint16_t flags;
@@ -13,51 +16,77 @@ struct dns_header {
     uint16_t arcount;
 };
 
-static const uint8_t *read_name(const uint8_t *ptr, const uint8_t *base, char *out) {
+static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
+                                     size_t payload_len, char *out,
+                                     int depth) {
+    if (depth > MAX_DNS_RECURSION) {
+        strcpy(out, "<too deep>");
+        return NULL;
+    }
+
+    size_t offset = ptr - base;
+    if (offset >= payload_len) return NULL;
+
     int len;
     char *pos = out;
-
-    while ((len = *ptr++)) {
+    size_t remaining = MAX_DNS_NAME_LEN;
+    while (offset < payload_len && (len = *ptr++)) {
+        offset++;
         if ((len & 0xC0) == 0xC0) { // compression pointer
-            int offset = ((len & 0x3F) << 8) | *ptr++;
-            read_name(base + offset, base, pos);
+            if (offset >= payload_len) return NULL;
+            int pointer_offset = ((len & 0x3F) << 8) | *ptr++;
+            if ((size_t)pointer_offset >= payload_len) return NULL;
+            read_name_safe(base + pointer_offset, base, payload_len, pos, depth + 1);
             return ptr;
         }
+        if (len > 63 || offset + len > payload_len || len >= remaining) return NULL;
         memcpy(pos, ptr, len);
         pos += len;
+        remaining -= len + 1;
         *pos++ = '.';
         ptr += len;
+        offset += len;
     }
-    *(pos - 1) = '\0';
+    if (pos != out)
+        *(pos - 1) = '\0';
+    else
+        *pos = '\0';
     return ptr;
 }
 
+static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
+                                       size_t payload_len) {
+    char name[MAX_DNS_NAME_LEN + 1];
+    const uint8_t *new_ptr = read_name_safe(ptr, base, payload_len, name, 0);
+    if (!new_ptr) return NULL;
+    ptr = new_ptr;
 
-static const uint8_t *read_record(const uint8_t *ptr, const uint8_t *base) {
-    char name[256];
-    ptr = read_name(ptr, base, name);
+    size_t remaining = payload_len - (ptr - base);
+    if (remaining < 10) return NULL; // type(2) + class(2) + ttl(4) + rdlen(2)
 
     uint16_t type = ntohs(*(uint16_t*)ptr); ptr += 2;
     uint16_t class = ntohs(*(uint16_t*)ptr); ptr += 2;
     uint32_t ttl = ntohl(*(uint32_t*)ptr); ptr += 4;
     uint16_t rdlength = ntohs(*(uint16_t*)ptr); ptr += 2;
 
+    if ((size_t)(ptr - base) + rdlength > payload_len) return NULL;
+
     printf("Name: %s, Type: %u, Class: %u, TTL: %u, RDLENGTH: %u\n",
            name, type, class, ttl, rdlength);
 
-    // Print RDATA for common types (A/AAAA/CNAME)
-    if (type == 1 && rdlength == 4) { // A record
+    if (type == 1 && rdlength == 4) { // A
         printf("A: %u.%u.%u.%u\n", ptr[0], ptr[1], ptr[2], ptr[3]);
-    } else if (type == 28 && rdlength == 16) { // AAAA record
+    } else if (type == 28 && rdlength == 16) { // AAAA
         char addr[40];
-        sprintf(addr, "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
-                      "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
-                ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5], ptr[6], ptr[7],
-                ptr[8], ptr[9], ptr[10], ptr[11], ptr[12], ptr[13], ptr[14], ptr[15]);
+        snprintf(addr, sizeof(addr),
+                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+                 ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5], ptr[6], ptr[7],
+                 ptr[8], ptr[9], ptr[10], ptr[11], ptr[12], ptr[13], ptr[14], ptr[15]);
         printf("AAAA: %s\n", addr);
     } else if (type == 5) { // CNAME
-        char cname[256];
-        read_name(ptr, base, cname);
+        char cname[MAX_DNS_NAME_LEN + 1];
+        if (!read_name_safe(ptr, base, payload_len, cname, 0)) return NULL;
         printf("CNAME: %s\n", cname);
     }
 
@@ -65,9 +94,9 @@ static const uint8_t *read_record(const uint8_t *ptr, const uint8_t *base) {
 }
 
 
-void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR udp_header, const UINT8 *payload, const UINT payload_len) {
+void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR udp_header,
+                       const UINT8 *payload, const UINT payload_len) {
 
-    // Example DNS logging: just print source/dest IP:port
     unsigned char *src_bytes = (unsigned char *)&ip_header->SrcAddr;
     unsigned char *dst_bytes = (unsigned char *)&ip_header->DstAddr;
 
@@ -75,7 +104,8 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
         src_bytes[0], src_bytes[1], src_bytes[2], src_bytes[3], ntohs(udp_header->SrcPort),
         dst_bytes[0], dst_bytes[1], dst_bytes[2], dst_bytes[3], ntohs(udp_header->DstPort));
 
-    struct dns_header *hdr = (struct dns_header *)payload;
+    if (payload_len < sizeof(struct dns_header)) return;
+    const struct dns_header *hdr = (const struct dns_header *)payload;
 
     fprintf(stderr, "ID: %u\n", ntohs(hdr->id));
     fprintf(stderr, "Questions: %u\n", ntohs(hdr->qdcount));
@@ -83,9 +113,14 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
 
     const uint8_t *ptr = payload + sizeof(struct dns_header);
 
+    // Questions
     for (int i = 0; i < ntohs(hdr->qdcount); i++) {
-        char name[256];
-        ptr = read_name(ptr, payload, name);
+        char name[MAX_DNS_NAME_LEN + 1];
+        const uint8_t *new_ptr = read_name_safe(ptr, payload, payload_len, name, 0);
+        if (!new_ptr) return;
+        ptr = new_ptr;
+
+        if ((size_t)(ptr - payload) + 4 > payload_len) return;
         uint16_t qtype = ntohs(*(uint16_t *)ptr); ptr += 2;
         uint16_t qclass = ntohs(*(uint16_t *)ptr); ptr += 2;
         fprintf(stderr, "Query: %s, Type: %u, Class: %u\n", name, qtype, qclass);
@@ -93,15 +128,22 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
 
     // Answers
     for (int i = 0; i < ntohs(hdr->ancount); i++) {
-        ptr = read_record(ptr, payload);
+        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
+        if (!new_ptr) return;
+        ptr = new_ptr;
     }
 
-    // Optionally: authority and additional records
+    // Authority
     for (int i = 0; i < ntohs(hdr->nscount); i++) {
-        ptr = read_record(ptr, payload);
-    }
-    for (int i = 0; i < ntohs(hdr->arcount); i++) {
-        ptr = read_record(ptr, payload);
+        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
+        if (!new_ptr) return;
+        ptr = new_ptr;
     }
 
+    // Additional
+    for (int i = 0; i < ntohs(hdr->arcount); i++) {
+        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
+        if (!new_ptr) return;
+        ptr = new_ptr;
+    }
 }

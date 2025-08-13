@@ -2,6 +2,7 @@
 
 CC = x86_64-w64-mingw32-gcc
 CFLAGS = -Wall -O2 -I$(PWD)
+#CFLAGS = -Wall -O0 -g -I$(PWD)          # -O0 disables optimizations, -g adds debug symbols
 LDFLAGS = -L$(PWD) -lWinDivert -lws2_32
 
 OBJS = proxydlp.o dns.o

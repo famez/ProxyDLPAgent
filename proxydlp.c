@@ -293,6 +293,11 @@ int main() {
             continue;
         }
 
+        if(!ip_header) {
+            fprintf(stderr, "WARNING: No ip header!!!!!\n");
+            continue;
+        }
+
         if(tcp_header) {
 
             /*UINT32 result =*/ handle_tcp_packet(&addr, ip_header, tcp_header, packet, packet_len);
