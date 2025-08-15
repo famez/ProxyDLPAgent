@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "proxydlp.h"
 #include "windivert.h"
 
 #include "dns.h"
@@ -43,11 +44,11 @@ HANDLE handle;
         } \
     } while (0)
 
+
 static void error(const char *msg) {
     fprintf(stderr, "%s\n", msg);
     exit(EXIT_FAILURE);
 }
-
 
 static void print_ip_port(UINT32 ip, UINT16 port) {
     unsigned char *bytes = (unsigned char *)&ip;
@@ -64,6 +65,83 @@ static UINT32 ip_str_to_u32(const char *ip_str) {
     return ip; // already in network byte order
 }
 
+
+UINT32 install_filter(){
+
+    char filter[256];
+    int r;
+
+    srand((unsigned int)time(NULL));
+
+    //We listen to outbound HTTP and HTTPS requests and also to incoming requests from the src proxy IP and port.
+
+    r = snprintf(filter, sizeof(filter),
+        "(outbound and tcp.DstPort == %d) or "
+        "(outbound and tcp.DstPort == %d) or "
+        "(inbound and tcp.SrcPort == %d and ip.SrcAddr == %s) or "
+        "(outbound and udp.DstPort == %d) or "
+        "(inbound and udp.SrcPort == %d)",
+        HTTP_PORT, HTTPS_PORT, PROXY_PORT, PROXY_IP, DNS_PORT, DNS_PORT);
+
+    if (r < 0 || r >= sizeof(filter)) {
+        error("failed to create filter string");
+    }
+
+    VPRINT(1, "Opening WinDivert with filter: %s", filter);
+
+    handle = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error("failed to open WinDivert device");
+    }
+
+    return 0;
+
+}
+
+
+UINT32 intercept_packets_loop() {
+
+    UINT8 packet[MAXBUF];
+    UINT packet_len;
+    WINDIVERT_ADDRESS addr;
+
+    PWINDIVERT_IPHDR ip_header;
+    PWINDIVERT_TCPHDR tcp_header;
+    PWINDIVERT_UDPHDR udp_header;
+
+    UINT8 *payload;
+    UINT payload_len;
+
+    while (1) {
+        if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
+            fprintf(stderr, "failed to read packet (%ld)\n", GetLastError());
+            continue;
+        }
+
+        if (!WinDivertHelperParsePacket(packet, packet_len, &ip_header, NULL, NULL,
+                                        NULL, NULL, &tcp_header, &udp_header, (PVOID *)&payload, &payload_len, NULL, NULL)) {
+            fprintf(stderr, "failed to parse packet\n");
+            continue;
+        }
+
+        if(!ip_header) {
+            fprintf(stderr, "WARNING: No ip header!!!!!\n");
+            continue;
+        }
+
+        if(tcp_header) {
+
+            /*UINT32 result =*/ handle_tcp_packet(&addr, ip_header, tcp_header, packet, packet_len);
+
+        } else if (udp_header) {
+            /*UINT32 result =*/ handle_udp_packet(&addr, ip_header, udp_header, packet, packet_len, payload, payload_len);
+        }
+
+    }
+
+    WinDivertClose(handle);
+    return 0;
+}
 
 // Find connection in table by original 4-tuple
 int find_conn_outbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
@@ -96,7 +174,7 @@ UINT16 get_unused_src_port() {
 }
 
 UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header,
-    const PWINDIVERT_UDPHDR udp_header, UINT8 *packet, UINT packet_len, UINT8 payload[MAXBUF], UINT payload_len) {
+    const PWINDIVERT_UDPHDR udp_header, UINT8 *packet, UINT packet_len, UINT8 *payload, UINT payload_len) {
 
     //Log DNS queries and responses.
     
@@ -241,73 +319,4 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 
     return 0;
 
-}
-
-int main() {
-    char filter[256];
-    int r;
-
-    srand((unsigned int)time(NULL));
-
-    //We listen to outbound HTTP and HTTPS requests and also to incoming requests from the src proxy IP and port.
-
-    r = snprintf(filter, sizeof(filter),
-        "(outbound and tcp.DstPort == %d) or "
-        "(outbound and tcp.DstPort == %d) or "
-        "(inbound and tcp.SrcPort == %d and ip.SrcAddr == %s) or "
-        "(outbound and udp.DstPort == %d) or "
-        "(inbound and udp.SrcPort == %d)",
-        HTTP_PORT, HTTPS_PORT, PROXY_PORT, PROXY_IP, DNS_PORT, DNS_PORT);
-
-    if (r < 0 || r >= sizeof(filter)) {
-        error("failed to create filter string");
-    }
-
-    VPRINT(1, "Opening WinDivert with filter: %s", filter);
-
-    handle = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
-    if (handle == INVALID_HANDLE_VALUE) {
-        error("failed to open WinDivert device");
-    }
-
-    UINT8 packet[MAXBUF];
-    UINT packet_len;
-    WINDIVERT_ADDRESS addr;
-
-    PWINDIVERT_IPHDR ip_header;
-    PWINDIVERT_TCPHDR tcp_header;
-    PWINDIVERT_UDPHDR udp_header;
-
-    UINT8 *payload;
-    UINT payload_len;
-
-    while (1) {
-        if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
-            fprintf(stderr, "failed to read packet (%ld)\n", GetLastError());
-            continue;
-        }
-
-        if (!WinDivertHelperParsePacket(packet, packet_len, &ip_header, NULL, NULL,
-                                        NULL, NULL, &tcp_header, &udp_header, (PVOID *)&payload, &payload_len, NULL, NULL)) {
-            fprintf(stderr, "failed to parse packet\n");
-            continue;
-        }
-
-        if(!ip_header) {
-            fprintf(stderr, "WARNING: No ip header!!!!!\n");
-            continue;
-        }
-
-        if(tcp_header) {
-
-            /*UINT32 result =*/ handle_tcp_packet(&addr, ip_header, tcp_header, packet, packet_len);
-
-        } else if (udp_header) {
-            /*UINT32 result =*/ handle_udp_packet(&addr, ip_header, udp_header, packet, packet_len, payload, payload_len);
-        }
-
-    }
-
-    WinDivertClose(handle);
-    return 0;
 }

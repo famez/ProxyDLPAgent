@@ -1,6 +1,6 @@
 // dnslog.h
-#ifndef DNSLOG_H
-#define DNSLOG_H
+#ifndef DNS_H
+#define DNS_H
 
 #include <windows.h>
 #include "windivert.h"
