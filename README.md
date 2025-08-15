@@ -7,3 +7,8 @@ Is uses the WinDivert software (dll+driver). Uploaded to the repo.
 For more information of WinDivert, go to the author web page: https://reqrypt.org/windivert.html
 
 Depends also on the WinSock2 library.
+
+Versions of the dependencies:
+
+Windivert: 2.2.2
+curl: 8.15.0
