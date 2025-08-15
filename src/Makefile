@@ -1,20 +1,25 @@
-# Makefile for proxydlp + dnslog on MinGW-w64
-
 CC      = x86_64-w64-mingw32-gcc
 CFLAGS  = -Wall -O2 -I../include/
-#CFLAGS = -Wall -O0 -g -I$(PWD)          # -O0 disables optimizations, -g adds debug symbols
 LDFLAGS = -L../libs/ -lWinDivert -lws2_32 -lcurl
 
-SRC  = $(wildcard *.c)
-OBJS = $(SRC:.c=.o)
+OBJDIR  = build
+SRC     = $(wildcard *.c)
+OBJS    = $(patsubst %.c,$(OBJDIR)/%.o,$(SRC))
+TARGET  = $(OBJDIR)/proxydlp.exe
 
-all: proxydlp.exe
+all: $(OBJDIR) $(TARGET)
 
-proxydlp.exe: $(OBJS)
+# Ensure the object directory exists
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
+
+# Link the executable inside the build directory
+$(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-%.o: %.c
+# Compile each .c into the object directory
+$(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o proxydlp.exe
+	rm -rf $(OBJDIR)
