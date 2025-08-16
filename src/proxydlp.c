@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "tracelog.h"
 #include "proxydlp.h"
 #include "windivert.h"
 
@@ -17,8 +18,6 @@
 #define HTTP_PORT       80
 #define HTTPS_PORT      443
 #define DNS_PORT        53
-
-#define VERBOSITY       0   // 0=silent, 1=events, 2=connections, 3=full packet details
 
 typedef struct {
     UINT32 orig_dst_ip;
@@ -36,13 +35,6 @@ conn_entry_t conn_table[MAX_CONN];
 int conn_count = 0;
 
 HANDLE handle;
-
-#define VPRINT(level, fmt, ...) \
-    do { \
-        if (VERBOSITY >= level) { \
-            fprintf(stderr, "[V%d] " fmt "\n", level, ##__VA_ARGS__); \
-        } \
-    } while (0)
 
 
 static void error(const char *msg) {

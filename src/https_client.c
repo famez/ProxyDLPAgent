@@ -8,14 +8,51 @@
 #include <lm.h>
 
 #include "https_client.h"
+#include "tracelog.h"
+
+
+struct response_string {
+    char *ptr;
+    size_t len;
+};
+
+void init_response_string(struct response_string *s) {
+    s->len = 0;
+    s->ptr = malloc(1);  // start with empty string
+    s->ptr[0] = '\0';
+}
+
+
+size_t write_callback_register_agent(void *ptr, size_t size, size_t nmemb, void *userdata) {
+    size_t new_len = size * nmemb;
+    struct response_string *s = (struct response_string *)userdata;
+
+    s->ptr = realloc(s->ptr, s->len + new_len + 1);
+    memcpy(s->ptr + s->len, ptr, new_len);
+    s->len += new_len;
+    s->ptr[s->len] = '\0';
+
+    return new_len;
+}
+
 
 // Callback function to handle incoming data
-size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
+size_t write_callback_generic_log(void *ptr, size_t size, size_t nmemb, void *userdata) {
     size_t total_size = size * nmemb;
     fwrite(ptr, size, nmemb, stdout); // Print directly to stdout
     return total_size;
 }
 
+
+void init_curl() {
+    VPRINT(1, "[INFO] Initializing libcurl...\n");
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+
+void close_curl() {
+    curl_global_cleanup();
+}
 
 // Get computer name
 void get_computer_name(char *buffer, DWORD size) {
@@ -98,7 +135,7 @@ void get_ip_addresses(char *buffer, size_t size) {
     free(pAdapterInfo);
 }
 
-int connect_to_server() {
+int send_heartbeat() {
     CURL *curl;
     CURLcode res;
 
@@ -126,16 +163,13 @@ int connect_to_server() {
              "}",
              computer_name, os_version, logged_users, ip_addresses, agent_version);
 
-    printf("[DEBUG] JSON Payload: %s\n", json_data);
+    VPRINT(1, "[DEBUG] JSON Payload: %s\n", json_data);
 
-    printf("[INFO] Initializing libcurl...\n");
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    printf("[INFO] Creating CURL easy handle...\n");
+    VPRINT(1, "[INFO] Creating CURL easy handle...\n");
     curl = curl_easy_init();
     if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "https://10.228.217.251/api/agent/heartbeat");
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_URL, BASE_URL HEARTBEAT_ENDPOINT);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
 
         // POST data
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data);
@@ -152,23 +186,103 @@ int connect_to_server() {
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-        printf("[INFO] Performing HTTPS POST request...\n");
+        VPRINT(1, "[INFO] Performing HTTPS POST request...\n");
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
             fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         } else {
-            printf("[INFO] POST request completed successfully.\n");
+            VPRINT(1, "[INFO] POST request completed successfully.\n");
         }
 
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
-    } else {
-        fprintf(stderr, "[ERROR] Failed to create CURL handle.\n");
-    }
 
-    curl_global_cleanup();
+    } else {
+        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
+    }
 
     return 0;
 
+}
+
+void save_agent_id_to_registry(const char *agent_id) {
+    HKEY hKey;
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE,
+                        "SOFTWARE\\MyAgent",
+                        0, NULL, 0,
+                        KEY_WRITE, NULL,
+                        &hKey, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(hKey, "AgentId", 0, REG_SZ,
+                       (BYTE*)agent_id, (DWORD)(strlen(agent_id) + 1));
+        RegCloseKey(hKey);
+    }
+}
+
+
+int register_agent() {
+    CURL *curl;
+    CURLcode res;
+    struct response_string s;
+
+    init_response_string(&s);
+
+    VPRINT(1, "[INFO] Creating CURL easy handle...\n");
+    curl = curl_easy_init();
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, BASE_URL REGISTER_ENDPOINT);
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_register_agent);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
+
+        // Debug
+        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+        VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
+        res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        } else {
+            VPRINT(1, "[INFO] GET request completed successfully.\n");
+            printf("[DEBUG] Response: %s\n", s.ptr);
+
+            // Extract agent_id
+            char *id_start = strstr(s.ptr, "\"guid\"");
+            if (id_start) {
+                id_start = strchr(id_start, ':');
+                if (id_start) {
+                    id_start++;
+                    while (*id_start == ' ' || *id_start == '"') id_start++;
+                    char *id_end = id_start;
+                    while (*id_end && *id_end != '"' && *id_end != ',' && *id_end != '}') id_end++;
+                    char agent_id[128];
+                    size_t len = id_end - id_start;
+                    if (len >= sizeof(agent_id)) len = sizeof(agent_id)-1;
+                    strncpy(agent_id, id_start, len);
+                    agent_id[len] = '\0';
+
+                    printf("[INFO] Extracted agent_id: %s\n", agent_id);
+
+                    // Save to file or registry
+                    save_agent_id_to_registry(agent_id);
+                }
+            }
+        }
+
+        curl_easy_cleanup(curl);
+    } else {
+        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
+    }
+
+    free(s.ptr);
+
+    return 0;
+}
+
+
+int get_domain_names_to_watch() {
+    return 0;
 }

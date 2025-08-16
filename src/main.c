@@ -14,13 +14,17 @@
 
 int main() {
 
-    printf("[INFO] Hello...\n");
+    init_curl();
 
-    connect_to_server();
+    register_agent();
+
+    send_heartbeat();
 
     install_filter();
 
     intercept_packets_loop();
+
+    close_curl();
 
     return 0;
 }
