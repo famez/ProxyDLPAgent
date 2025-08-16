@@ -21,8 +21,8 @@ int connect_to_server() {
     printf("[INFO] Creating CURL easy handle...\n");
     curl = curl_easy_init();
     if (curl) {
-        printf("[INFO] Setting URL to connect: https://10.228.217.251/api/agent/hearbeat\n");
-        curl_easy_setopt(curl, CURLOPT_URL, "https://10.228.217.251/api/agent/hearbeat");
+        printf("[INFO] Setting URL to connect: https://10.228.217.251/api/agent/heartbeat\n");
+        curl_easy_setopt(curl, CURLOPT_URL, "https://10.228.217.251/api/agent/heartbeat");
 
         printf("[INFO] Setting write callback...\n");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
