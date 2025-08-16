@@ -2,6 +2,7 @@
     "files.associations": {
         "stdlib.h": "c",
         "https_client.h": "c",
-        "curl.h": "c"
+        "curl.h": "c",
+        "lm.h": "c"
     }
 }

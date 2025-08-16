@@ -5,6 +5,7 @@
 #include <lmcons.h>
 #include <iphlpapi.h>
 #include <curl/curl.h>
+#include <lm.h>
 
 #include "https_client.h"
 
@@ -35,14 +36,47 @@ void get_os_version(char *buffer, size_t size) {
     }
 }
 
-
 // Get current user
-void get_current_user(char *buffer, DWORD size) {
-    DWORD username_len = size;
-    if (!GetUserNameA(buffer, &username_len)) {
-        snprintf(buffer, size, "Unknown User");
+void get_logged_in_users(char *buffer, size_t size) {
+    LPWKSTA_USER_INFO_1 pBuf = NULL;
+    LPWKSTA_USER_INFO_1 pTmpBuf;
+    DWORD dwLevel = 1;
+    DWORD dwPrefMaxLen = MAX_PREFERRED_LENGTH;
+    DWORD dwEntriesRead = 0;
+    DWORD dwTotalEntries = 0;
+    DWORD i;
+
+    buffer[0] = '\0';
+
+    NET_API_STATUS nStatus = NetWkstaUserEnum(NULL,
+                                              dwLevel,
+                                              (LPBYTE*)&pBuf,
+                                              dwPrefMaxLen,
+                                              &dwEntriesRead,
+                                              &dwTotalEntries,
+                                              NULL);
+    if ((nStatus == NERR_Success || nStatus == ERROR_MORE_DATA) && pBuf != NULL) {
+        pTmpBuf = pBuf;
+        for (i = 0; i < dwEntriesRead; i++) {
+            if (pTmpBuf != NULL && pTmpBuf->wkui1_username != NULL) {
+                if (strlen(buffer) + wcslen(pTmpBuf->wkui1_username) + 2 < size) {
+                    char username[UNLEN+1];
+                    wcstombs(username, pTmpBuf->wkui1_username, sizeof(username));
+                    strcat_s(buffer, size, username);
+                    strcat_s(buffer, size, ", ");
+                }
+            }
+            pTmpBuf++;
+        }
+        NetApiBufferFree(pBuf);
+
+        size_t len = strlen(buffer);
+        if (len > 2) buffer[len - 2] = '\0'; // trim trailing comma+space
+    } else {
+        snprintf(buffer, size, "No active users");
     }
 }
+
 
 // Get IP addresses
 void get_ip_addresses(char *buffer, size_t size) {
@@ -70,14 +104,14 @@ int connect_to_server() {
 
     char computer_name[MAX_COMPUTERNAME_LENGTH + 1];
     char os_version[128];
-    char current_user[UNLEN + 1];
+    char logged_users[UNLEN + 1];
     char ip_addresses[512];
     const char *agent_version = "1.0.0";
 
     // Gather system info
     get_computer_name(computer_name, sizeof(computer_name));
     get_os_version(os_version, sizeof(os_version));
-    get_current_user(current_user, sizeof(current_user));
+    get_logged_in_users(logged_users, sizeof(logged_users));
     get_ip_addresses(ip_addresses, sizeof(ip_addresses));
 
     // Build JSON string manually
@@ -90,7 +124,7 @@ int connect_to_server() {
              "\"ip_addresses\":\"%s\","
              "\"agent_version\":\"%s\""
              "}",
-             computer_name, os_version, current_user, ip_addresses, agent_version);
+             computer_name, os_version, logged_users, ip_addresses, agent_version);
 
     printf("[DEBUG] JSON Payload: %s\n", json_data);
 
