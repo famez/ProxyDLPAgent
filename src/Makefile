@@ -1,6 +1,6 @@
 CC      = x86_64-w64-mingw32-gcc
 CFLAGS  = -Wall -O2 -I../include/
-LDFLAGS = -L../libs/ -lWinDivert -lws2_32 -lcurl
+LDFLAGS = -L../libs/ -lWinDivert -lws2_32 -lcurl -liphlpapi
 
 OBJDIR  = build
 SRC     = $(wildcard *.c)
