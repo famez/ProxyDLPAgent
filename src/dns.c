@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "windivert.h"
+#include "tracelog.h"
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
@@ -84,23 +85,31 @@ static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
     if (remaining < 10) return NULL; // type(2) + class(2) + ttl(4) + rdlen(2)
 
     uint16_t type = ntohs(*(uint16_t*)ptr); ptr += 2;
-    //uint16_t class = ntohs(*(uint16_t*)ptr); ptr += 2;
-    //uint32_t ttl = ntohl(*(uint32_t*)ptr); ptr += 4;
+    //uint16_t class = ntohs(*(uint16_t*)ptr); 
+    ptr += 2;
+    //uint32_t ttl = ntohl(*(uint32_t*)ptr); 
+    ptr += 4;
     uint16_t rdlength = ntohs(*(uint16_t*)ptr); ptr += 2;
 
     if ((size_t)(ptr - base) + rdlength > payload_len) return NULL;
 
     if (type == 1 && rdlength == 4) { // A record
-        fprintf(stderr, "A: %u.%u.%u.%u\n", ptr[0], ptr[1], ptr[2], ptr[3]);
+        //fprintf(stderr, "A: %u.%u.%u.%u\n", ptr[0], ptr[1], ptr[2], ptr[3]);
         if (table->num_entries < MAX_DNS_ENTRIES) {
             dns_entry_t *entry = &table->entries[table->num_entries];
              // safely copy hostname
             size_t len = strnlen(name, MAX_HOSTNAME_LEN);
             memcpy(entry->hostname, name, len);
             entry->hostname[len] = '\0';
+            VPRINT(2, "[INFO] Hostname: %s\n", entry->hostname);
             entry->ipv4_addresses[0] = *(uint32_t*)ptr;  // store in network order
             entry->num_addresses = 1;
             table->num_entries++;
+
+            unsigned char *ip_bytes = (unsigned char *)&entry->ipv4_addresses[0];
+
+            VPRINT(2, "[INFO] A IP address: %u.%u.%u.%u\n", 
+                ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
         }
     } 
     // handle CNAME or AAAA similarly if needed
