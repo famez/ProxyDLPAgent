@@ -1,28 +1,30 @@
 // dns.c
 #include <stdio.h>
 #include <windows.h>
+#include <string.h>
 
 #include "windivert.h"
 #include "tracelog.h"
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
-#define MAX_IP_ADDRESSES 16   // max IPv4 addresses per hostname
-#define MAX_HOSTNAME_LEN 255
+#define MAX_HOSTNAME_LEN     255
+#define MAX_IP_ADDRESSES     16   // max IPv4 addresses per entry
+#define MAX_DNS_NAMES        16   // max hostnames/aliases per entry
+#define MAX_DNS_ENTRIES      128
 
 typedef struct dns_entry {
-    char hostname[MAX_HOSTNAME_LEN + 1];
+    char hostnames[MAX_DNS_NAMES][MAX_HOSTNAME_LEN + 1];
+    int num_hostnames;
+
     uint32_t ipv4_addresses[MAX_IP_ADDRESSES];
     int num_addresses;
 } dns_entry_t;
-
-#define MAX_DNS_ENTRIES 128
 
 typedef struct dns_table {
     dns_entry_t entries[MAX_DNS_ENTRIES];
     int num_entries;
 } dns_table_t;
-
 
 typedef struct dns_header {
     uint16_t id;
@@ -35,11 +37,12 @@ typedef struct dns_header {
 
 static dns_table_t g_dns_table = { .num_entries = 0 };
 
-dns_entry_t* dns_table_find(dns_table_t *table, const char *hostname);
+dns_entry_t* dns_table_find_by_hostname(dns_table_t *table, const char *hostname);
+dns_entry_t* dns_table_find_by_ip(dns_table_t *table, uint32_t ip);
 dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname);
+void dns_entry_add_hostname(dns_entry_t *entry, const char *hostname);
 void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip);
 void dns_table_add_cname(dns_table_t *table, const char *alias, const char *canonical);
-
 
 
 static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
@@ -80,8 +83,6 @@ static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
     return ptr;
 }
 
-
-
 static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
                                        size_t payload_len, dns_table_t *table) {
     char name[MAX_DNS_NAME_LEN + 1];
@@ -98,7 +99,7 @@ static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
 
     if ((size_t)(ptr - base) + rdlength > payload_len) return NULL;
 
-    if (type == 1 && rdlength == 4) { // A
+    if (type == 1 && rdlength == 4) { // A record
         dns_entry_t *entry = dns_table_add_entry(table, name);
         dns_entry_add_ip(entry, *(uint32_t*)ptr);
     } else if (type == 5) { // CNAME
@@ -107,11 +108,10 @@ static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
         if (!end) return NULL;
         dns_table_add_cname(table, name, cname);
     }
-    // TODO: AAAA support, etc.
+    // TODO: AAAA support
 
     return ptr + rdlength;
 }
-
 
 void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR udp_header,
                        const UINT8 *payload, const UINT payload_len) {
@@ -151,42 +151,41 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
         if (!new_ptr) return;
         ptr = new_ptr;
     }
-
-    /*
-    // Authority
-    for (int i = 0; i < ntohs(hdr->nscount); i++) {
-        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
-        if (!new_ptr) return;
-        ptr = new_ptr;
-    }
-
-    // Additional
-    for (int i = 0; i < ntohs(hdr->arcount); i++) {
-        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len);
-        if (!new_ptr) return;
-        ptr = new_ptr;
-    }
-    */
-
 }
 
 
-// Find an existing entry by hostname
-dns_entry_t* dns_table_find(dns_table_t *table, const char *hostname) {
+// ----------------------------------------------------------------------
+// Lookup and modification functions
+// ----------------------------------------------------------------------
+
+// Find entry by hostname
+dns_entry_t* dns_table_find_by_hostname(dns_table_t *table, const char *hostname) {
     for (int i = 0; i < table->num_entries; i++) {
-        if (strcmp(table->entries[i].hostname, hostname) == 0) {
-            return &table->entries[i];
+        for (int j = 0; j < table->entries[i].num_hostnames; j++) {
+            if (strcmp(table->entries[i].hostnames[j], hostname) == 0) {
+                return &table->entries[i];
+            }
         }
     }
     return NULL;
 }
 
-// Add a new entry if it doesn't exist, return pointer to entry
-dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname) {
-    dns_entry_t *entry = dns_table_find(table, hostname);
-    if (entry) {
-        return entry; // already exists
+// Find entry by IP
+dns_entry_t* dns_table_find_by_ip(dns_table_t *table, uint32_t ip) {
+    for (int i = 0; i < table->num_entries; i++) {
+        for (int j = 0; j < table->entries[i].num_addresses; j++) {
+            if (table->entries[i].ipv4_addresses[j] == ip) {
+                return &table->entries[i];
+            }
+        }
     }
+    return NULL;
+}
+
+// Add a new entry (if doesn't exist yet)
+dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname) {
+    dns_entry_t *entry = dns_table_find_by_hostname(table, hostname);
+    if (entry) return entry;
 
     if (table->num_entries >= MAX_DNS_ENTRIES) {
         VPRINT(1, "[WARN] DNS table full, cannot add entry for %s\n", hostname);
@@ -195,18 +194,33 @@ dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname) {
 
     entry = &table->entries[table->num_entries++];
     memset(entry, 0, sizeof(*entry));
-    size_t len = strnlen(hostname, MAX_HOSTNAME_LEN);
-    memcpy(entry->hostname, hostname, len);
-    entry->hostname[len] = '\0';
+    strncpy(entry->hostnames[0], hostname, MAX_HOSTNAME_LEN);
+    entry->num_hostnames = 1;
     entry->num_addresses = 0;
     return entry;
 }
 
-// Attach an IPv4 address to an entry
+// Add an alias hostname to an existing entry
+void dns_entry_add_hostname(dns_entry_t *entry, const char *hostname) {
+    if (!entry) return;
+
+    for (int i = 0; i < entry->num_hostnames; i++) {
+        if (strcmp(entry->hostnames[i], hostname) == 0) {
+            return; // already stored
+        }
+    }
+
+    if (entry->num_hostnames < MAX_DNS_NAMES) {
+        strncpy(entry->hostnames[entry->num_hostnames++], hostname, MAX_HOSTNAME_LEN);
+    } else {
+        VPRINT(1, "[WARN] Too many hostnames for entry, ignoring %s\n", hostname);
+    }
+}
+
+// Add an IPv4 address to an entry
 void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip) {
     if (!entry) return;
 
-    // Check if already stored
     for (int i = 0; i < entry->num_addresses; i++) {
         if (entry->ipv4_addresses[i] == ip) {
             return; // avoid duplicates
@@ -217,24 +231,19 @@ void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip) {
         entry->ipv4_addresses[entry->num_addresses++] = ip;
 
         unsigned char *ip_bytes = (unsigned char *)&ip;
-        VPRINT(2, "[INFO] Added IP %u.%u.%u.%u to %s\n",
-            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
-            entry->hostname);
+        VPRINT(2, "[INFO] Added IP %u.%u.%u.%u to entry\n",
+            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
     } else {
-        VPRINT(1, "[WARN] Too many IPs for %s, ignoring\n", entry->hostname);
+        VPRINT(1, "[WARN] Too many IPs for entry, ignoring\n");
     }
 }
 
 // Store a CNAME mapping (alias → canonical)
 void dns_table_add_cname(dns_table_t *table, const char *alias, const char *canonical) {
     dns_entry_t *alias_entry = dns_table_add_entry(table, alias);
-    dns_entry_t *canon_entry = dns_table_add_entry(table, canonical);
+    if (!alias_entry) return;
 
-    if (!alias_entry || !canon_entry) return;
+    dns_entry_add_hostname(alias_entry, canonical);
 
-    // For now: just copy canonical name into alias entry
-    // Later, you could maintain a proper alias→canonical chain
-    snprintf(alias_entry->hostname, MAX_HOSTNAME_LEN, "%s", canonical);
-
-    VPRINT(2, "[INFO] CNAME: %s -> %s\n", alias, canonical);
+    VPRINT(2, "[INFO] CNAME: %s -> %s (stored in same entry)\n", alias, canonical);
 }
