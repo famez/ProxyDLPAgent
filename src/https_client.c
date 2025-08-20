@@ -6,6 +6,8 @@
 #include <iphlpapi.h>
 #include <curl/curl.h>
 #include <lm.h>
+#include <cJSON.h>
+
 
 #include "https_client.h"
 #include "tracelog.h"
@@ -206,16 +208,39 @@ int send_heartbeat() {
 
 }
 
-void save_agent_id_to_registry(const char *agent_id) {
+
+void save_string_to_registry(const char *value_name, const char *value_data) {
     HKEY hKey;
-    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE,
-                        "SOFTWARE\\MyAgent",
-                        0, NULL, 0,
-                        KEY_WRITE, NULL,
-                        &hKey, NULL) == ERROR_SUCCESS) {
-        RegSetValueExA(hKey, "AgentId", 0, REG_SZ,
-                       (BYTE*)agent_id, (DWORD)(strlen(agent_id) + 1));
+    LONG result;
+
+    result = RegCreateKeyExA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\ProxyDlp",
+        0, NULL, 0,
+        KEY_WRITE, NULL,
+        &hKey, NULL
+    );
+
+    if (result == ERROR_SUCCESS) {
+        result = RegSetValueExA(
+            hKey,
+            value_name,         // registry value name (e.g. "guid" or "token")
+            0,
+            REG_SZ,
+            (const BYTE*)value_data,
+            (DWORD)(strlen(value_data) + 1)
+        );
+
+        if (result != ERROR_SUCCESS) {
+            VPRINT(2, "[ERROR] Failed to set registry value %s (error %ld)\n",
+                    value_name, result);
+        } else {
+            VPRINT(2, "[INFO] Saved %s to registry successfully.\n", value_name);
+        }
+
         RegCloseKey(hKey);
+    } else {
+        VPRINT(2, "[ERROR] Failed to open/create registry key (error %ld)\n", result);
     }
 }
 
@@ -246,30 +271,38 @@ int register_agent() {
         if (res != CURLE_OK) {
             fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         } else {
-            VPRINT(1, "[INFO] GET request completed successfully.\n");
-            printf("[DEBUG] Response: %s\n", s.ptr);
 
-            // Extract agent_id
-            char *id_start = strstr(s.ptr, "\"guid\"");
-            if (id_start) {
-                id_start = strchr(id_start, ':');
-                if (id_start) {
-                    id_start++;
-                    while (*id_start == ' ' || *id_start == '"') id_start++;
-                    char *id_end = id_start;
-                    while (*id_end && *id_end != '"' && *id_end != ',' && *id_end != '}') id_end++;
-                    char agent_id[128];
-                    size_t len = id_end - id_start;
-                    if (len >= sizeof(agent_id)) len = sizeof(agent_id)-1;
-                    strncpy(agent_id, id_start, len);
-                    agent_id[len] = '\0';
+            VPRINT(2, "[INFO] GET request completed successfully.\n");
+            VPRINT(2, "[DEBUG] Response: %s\n", s.ptr);
 
-                    printf("[INFO] Extracted agent_id: %s\n", agent_id);
+            // Parse JSON response using cJSON
+            cJSON *json = cJSON_Parse(s.ptr);
+            if (!json) {
+                VPRINT(2, "[ERROR] Failed to parse JSON response\n");
+            } else {
+                // Extract GUID
+                cJSON *guid_item = cJSON_GetObjectItemCaseSensitive(json, "guid");
+                // Extract token
+                cJSON *token_item = cJSON_GetObjectItemCaseSensitive(json, "token");
 
-                    // Save to file or registry
-                    save_agent_id_to_registry(agent_id);
+                if (cJSON_IsString(guid_item) && guid_item->valuestring &&
+                    cJSON_IsString(token_item) && token_item->valuestring) {
+                    
+                    VPRINT(2, "[INFO] Extracted agent_id: %s\n", guid_item->valuestring);
+                    //VPRINT(2, "[INFO] Extracted token: %s\n", token_item->valuestring);
+
+                    // Save both to registry / file
+                    save_string_to_registry("guid", guid_item->valuestring);
+                    save_string_to_registry("token", token_item->valuestring);
+
+                } else {
+                    VPRINT(2, "[ERROR] Missing 'guid' or 'token' in response\n");
                 }
+
+                cJSON_Delete(json);
+
             }
+
         }
 
         curl_easy_cleanup(curl);

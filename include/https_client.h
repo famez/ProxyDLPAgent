@@ -1,7 +1,7 @@
 #ifndef HTTPSCLIENT_H
 #define HTTPSCLIENT_H
 
-#define BASE_URL    "https://10.228.217.251/api/agent/"
+#define BASE_URL    "https://localhost/api/agent/"
 
 #define REGISTER_ENDPOINT   "register"
 #define HEARTBEAT_ENDPOINT  "heartbeat"

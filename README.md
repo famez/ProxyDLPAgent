@@ -12,3 +12,4 @@ Versions of the dependencies:
 
 Windivert: 2.2.2
 curl: 8.15.0
+cjson (included directly on the code): v1.7.18
