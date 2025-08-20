@@ -158,11 +158,9 @@ BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffe
     return TRUE;
 }
 
-void save_string_to_registry(const char *value_name, const char *value_data) {
+BOOL save_string_to_registry(const char *value_name, const char *value_data) {
     HKEY hKey;
-    LONG result;
-
-    result = RegCreateKeyExA(
+    LONG result = RegCreateKeyExA(
         HKEY_LOCAL_MACHINE,
         "SOFTWARE\\ProxyDlp",
         0, NULL, 0,
@@ -170,33 +168,32 @@ void save_string_to_registry(const char *value_name, const char *value_data) {
         &hKey, NULL
     );
 
-    if (result == ERROR_SUCCESS) {
-        result = RegSetValueExA(
-            hKey,
-            value_name,         // registry value name (e.g. "guid" or "token")
-            0,
-            REG_SZ,
-            (const BYTE*)value_data,
-            (DWORD)(strlen(value_data) + 1)
-        );
-
-        if (result != ERROR_SUCCESS) {
-            VPRINT(2, "[ERROR] Failed to set registry value %s (error %ld)\n",
-                    value_name, result);
-        } else {
-            VPRINT(2, "[INFO] Saved %s to registry successfully.\n", value_name);
-        }
-
-        RegCloseKey(hKey);
-    } else {
-        VPRINT(2, "[ERROR] Failed to open/create registry key (error %ld)\n", result);
+    if (result != ERROR_SUCCESS) {
+        fprintf(stderr, "[ERROR] RegCreateKeyExA failed (%ld)\n", result);
+        return FALSE;
     }
-}
 
+    result = RegSetValueExA(
+        hKey, value_name, 0, REG_SZ,
+        (const BYTE*)value_data,
+        (DWORD)(strlen(value_data) + 1)
+    );
+
+    RegCloseKey(hKey);
+
+    if (result != ERROR_SUCCESS) {
+        fprintf(stderr, "[ERROR] RegSetValueExA failed (%ld)\n", result);
+        return FALSE;
+    }
+
+    return TRUE;
+}
 
 int send_heartbeat() {
     CURL *curl;
     CURLcode res;
+    long http_code = 0;
+    int ret = -1; // default: error
 
     char computer_name[MAX_COMPUTERNAME_LENGTH + 1];
     char os_version[128];
@@ -210,150 +207,178 @@ int send_heartbeat() {
     get_logged_in_users(logged_users, sizeof(logged_users));
     get_ip_addresses(ip_addresses, sizeof(ip_addresses));
 
+    // Get guid and token from registry
     char guid[128] = {0};
     char token[256] = {0};
-
     if (!read_string_from_registry("guid", guid, sizeof(guid))) {
         fprintf(stderr, "[ERROR] guid not found in registry\n");
-        return -1;
+        return -2;
     }
     if (!read_string_from_registry("token", token, sizeof(token))) {
         fprintf(stderr, "[ERROR] token not found in registry\n");
-        return -1;
+        return -3;
     }
 
     char auth_header[512];
     snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
-    
-    // Build JSON string manually
+
     // Build JSON with cJSON
     cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        fprintf(stderr, "[ERROR] Failed to create JSON object\n");
+        return -4;
+    }
+
     cJSON_AddStringToObject(root, "computer_name", computer_name);
     cJSON_AddStringToObject(root, "os_version", os_version);
     cJSON_AddStringToObject(root, "user", logged_users);
     cJSON_AddStringToObject(root, "ip_addresses", ip_addresses);
     cJSON_AddStringToObject(root, "agent_version", agent_version);
-    cJSON_AddStringToObject(root, "guid", guid);  // add guid
+    cJSON_AddStringToObject(root, "guid", guid);
 
     char *json_data = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+
+    if (!json_data) {
+        fprintf(stderr, "[ERROR] Failed to print JSON payload\n");
+        return -5;
+    }
 
     VPRINT(1, "[DEBUG] JSON Payload: %s\n", json_data);
 
     VPRINT(1, "[INFO] Creating CURL easy handle...\n");
     curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, BASE_URL HEARTBEAT_ENDPOINT);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
-
-        // POST data
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data);
-
-        // Set content-type to JSON
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, auth_header);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-        // Optional debugging
-        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
-        // Skip SSL verification (for testing only)
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-
-        VPRINT(1, "[INFO] Performing HTTPS POST request...\n");
-        res = curl_easy_perform(curl);
-
-        if (res != CURLE_OK) {
-            fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-        } else {
-            VPRINT(1, "[INFO] POST request completed successfully.\n");
-        }
-
-        free(json_data);
-
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-
-    } else {
+    if (!curl) {
         VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
+        free(json_data);
+        return -6;
     }
 
-    return 0;
+    curl_easy_setopt(curl, CURLOPT_URL, BASE_URL HEARTBEAT_ENDPOINT);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data);
 
+    // Set headers
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, auth_header);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // Debug/SSL
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    VPRINT(1, "[INFO] Performing HTTPS POST request...\n");
+    res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        ret = -7;
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code != 200) {
+            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+            ret = -8;
+        } else {
+            VPRINT(1, "[INFO] POST request completed successfully.\n");
+            ret = 0; // success ✅
+        }
+    }
+
+    free(json_data);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    return ret;
 }
+
 
 int register_agent() {
     CURL *curl;
     CURLcode res;
+    long http_code = 0;
     struct response_string s;
+    int ret = -1; // default: error
 
     init_response_string(&s);
 
     VPRINT(1, "[INFO] Creating CURL easy handle...\n");
     curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, BASE_URL REGISTER_ENDPOINT);
-        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_register_agent);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
+    if (!curl) {
+        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
+        free(s.ptr);
+        return -2; // CURL init failed
+    }
 
-        // Debug
-        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_URL, BASE_URL REGISTER_ENDPOINT);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_register_agent);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
 
-        VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
-        res = curl_easy_perform(curl);
+    // Debug / SSL relax
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-        if (res != CURLE_OK) {
-            fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+    VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
+    res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n",
+                curl_easy_strerror(res));
+        ret = -3; // network error
+    } else {
+        // Check HTTP response code
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code != 200) {
+            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+            ret = -4; // bad HTTP response
         } else {
-
             VPRINT(2, "[INFO] GET request completed successfully.\n");
-            //VPRINT(2, "[DEBUG] Response: %s\n", s.ptr);       No showing response as the token is logged...
 
-            // Parse JSON response using cJSON
+            // Parse JSON
             cJSON *json = cJSON_Parse(s.ptr);
             if (!json) {
                 VPRINT(2, "[ERROR] Failed to parse JSON response\n");
+                ret = -5; // JSON parse error
             } else {
-                // Extract GUID
                 cJSON *guid_item = cJSON_GetObjectItemCaseSensitive(json, "guid");
-                // Extract token
                 cJSON *token_item = cJSON_GetObjectItemCaseSensitive(json, "token");
 
                 if (cJSON_IsString(guid_item) && guid_item->valuestring &&
                     cJSON_IsString(token_item) && token_item->valuestring) {
                     
                     VPRINT(2, "[INFO] Extracted agent_id: %s\n", guid_item->valuestring);
-                    //VPRINT(2, "[INFO] Extracted token: %s\n", token_item->valuestring);
 
-                    // Save both to registry / file
-                    save_string_to_registry("guid", guid_item->valuestring);
-                    save_string_to_registry("token", token_item->valuestring);
+                    // Save GUID
+                    if (!save_string_to_registry("guid", guid_item->valuestring)) {
+                        VPRINT(1, "[ERROR] Failed to save guid to registry (insufficient permissions?)\n");
+                        ret = -6;
+                    }
+                    // Save Token
+                    else if (!save_string_to_registry("token", token_item->valuestring)) {
+                        VPRINT(1, "[ERROR] Failed to save token to registry (insufficient permissions?)\n");
+                        ret = -7;
+                    } else {
+                        ret = 0; // SUCCESS ✅
+                    }
 
                 } else {
                     VPRINT(2, "[ERROR] Missing 'guid' or 'token' in response\n");
+                    ret = -8;
                 }
 
                 cJSON_Delete(json);
-
             }
-
         }
-
-        curl_easy_cleanup(curl);
-    } else {
-        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
     }
 
+    curl_easy_cleanup(curl);
     free(s.ptr);
 
-    return 0;
+    return ret;
 }
-
 
 int get_domain_names_to_watch() {
     return 0;
