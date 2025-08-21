@@ -11,6 +11,7 @@
 #include "proxydlp.h"
 #include "https_client.h"
 #include "config.h"
+#include "heartbeat.h"
 
 
 int main() {
@@ -24,13 +25,15 @@ int main() {
 
     }
     
-    send_heartbeat();
+    init_heartbeat_worker();
 
     install_filter();
 
     intercept_packets_loop();
 
     end_https();
+
+    finish_heartbeat_worker();
 
     return 0;
 }
