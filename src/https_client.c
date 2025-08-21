@@ -320,6 +320,68 @@ int register_agent() {
     return ret;
 }
 
-int get_domain_names_to_watch() {
-    return 0;
+int get_urls_to_monitor() {
+    CURL *curl;
+    CURLcode res;
+    long http_code = 0;
+    int ret = -1;
+
+    // Get guid and token from config
+    const char *guid = get_guid();
+    const char *token = get_token();
+
+    if (!guid || !token) {
+        fprintf(stderr, "[ERROR] Missing guid or token\n");
+        return -2;
+    }
+
+    char auth_header[512];
+    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
+
+    // Build URL with guid in query
+    char url[1024];
+    snprintf(url, sizeof(url), "%s%s?guid=%s", BASE_URL, MON_URLS_ENDPOINT, guid);
+
+    VPRINT(1, "[DEBUG] Request URL: %s\n", url);
+
+    curl = curl_easy_init();
+    if (!curl) {
+        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
+        return -3;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
+
+    // Headers
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, auth_header);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // Debug/SSL
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
+    res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        ret = -4;
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code != 200) {
+            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+            ret = -5;
+        } else {
+            VPRINT(1, "[INFO] GET request completed successfully.\n");
+            ret = 0; // success
+        }
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    return ret;
 }

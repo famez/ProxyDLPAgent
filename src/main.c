@@ -25,6 +25,9 @@ int main() {
 
     }
     
+    get_urls_to_monitor();
+
+    //Start heartbeat worker to report status to the server
     init_heartbeat_worker();
 
     install_filter();
