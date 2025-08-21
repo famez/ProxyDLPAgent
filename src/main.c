@@ -10,21 +10,27 @@
 
 #include "proxydlp.h"
 #include "https_client.h"
+#include "config.h"
 
 
 int main() {
 
-    init_curl();
+    init_https();
+    
+    if (!load_values_from_registry()) {
+        
+        //If no values in registry, then let's proceed to register the agent.
+        register_agent();
 
-    register_agent();
-
+    }
+    
     send_heartbeat();
 
     install_filter();
 
     intercept_packets_loop();
 
-    close_curl();
+    end_https();
 
     return 0;
 }

@@ -3,6 +3,10 @@
         "stdlib.h": "c",
         "https_client.h": "c",
         "curl.h": "c",
-        "lm.h": "c"
+        "lm.h": "c",
+        "tracelog.h": "c",
+        "cjson.h": "c",
+        "ws2tcpip.h": "c",
+        "config.h": "c"
     }
 }

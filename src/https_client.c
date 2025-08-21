@@ -11,6 +11,7 @@
 
 #include "https_client.h"
 #include "tracelog.h"
+#include "config.h"
 
 
 struct response_string {
@@ -46,13 +47,13 @@ size_t write_callback_generic_log(void *ptr, size_t size, size_t nmemb, void *us
 }
 
 
-void init_curl() {
+void init_https() {
     VPRINT(1, "[INFO] Initializing libcurl...\n");
     curl_global_init(CURL_GLOBAL_DEFAULT);
 }
 
 
-void close_curl() {
+void end_https() {
     curl_global_cleanup();
 }
 
@@ -138,57 +139,6 @@ void get_ip_addresses(char *buffer, size_t size) {
 }
 
 
-BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffer_size) {
-    HKEY hKey;
-    LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\ProxyDlp", 0, KEY_READ, &hKey);
-    if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] Failed to open registry key (error %ld)\n", result);
-        return FALSE;
-    }
-
-    DWORD type = REG_SZ;
-    result = RegGetValueA(hKey, NULL, value_name, RRF_RT_REG_SZ, &type, buffer, &buffer_size);
-    RegCloseKey(hKey);
-
-    if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] Failed to read registry value %s (error %ld)\n", value_name, result);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-BOOL save_string_to_registry(const char *value_name, const char *value_data) {
-    HKEY hKey;
-    LONG result = RegCreateKeyExA(
-        HKEY_LOCAL_MACHINE,
-        "SOFTWARE\\ProxyDlp",
-        0, NULL, 0,
-        KEY_WRITE, NULL,
-        &hKey, NULL
-    );
-
-    if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] RegCreateKeyExA failed (%ld)\n", result);
-        return FALSE;
-    }
-
-    result = RegSetValueExA(
-        hKey, value_name, 0, REG_SZ,
-        (const BYTE*)value_data,
-        (DWORD)(strlen(value_data) + 1)
-    );
-
-    RegCloseKey(hKey);
-
-    if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] RegSetValueExA failed (%ld)\n", result);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
 int send_heartbeat() {
     CURL *curl;
     CURLcode res;
@@ -208,16 +158,9 @@ int send_heartbeat() {
     get_ip_addresses(ip_addresses, sizeof(ip_addresses));
 
     // Get guid and token from registry
-    char guid[128] = {0};
-    char token[256] = {0};
-    if (!read_string_from_registry("guid", guid, sizeof(guid))) {
-        fprintf(stderr, "[ERROR] guid not found in registry\n");
-        return -2;
-    }
-    if (!read_string_from_registry("token", token, sizeof(token))) {
-        fprintf(stderr, "[ERROR] token not found in registry\n");
-        return -3;
-    }
+
+    const char * guid = get_guid();
+    const char * token = get_token();
 
     char auth_header[512];
     snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
@@ -351,15 +294,12 @@ int register_agent() {
                     
                     VPRINT(2, "[INFO] Extracted agent_id: %s\n", guid_item->valuestring);
 
-                    // Save GUID
-                    if (!save_string_to_registry("guid", guid_item->valuestring)) {
-                        VPRINT(1, "[ERROR] Failed to save guid to registry (insufficient permissions?)\n");
+                    set_guid(guid_item->valuestring);
+                    set_token(token_item->valuestring);
+
+                    if (!save_values_to_registry()) {
+                        VPRINT(1, "[ERROR] Failed to save guid or token to registry (insufficient permissions?)\n");
                         ret = -6;
-                    }
-                    // Save Token
-                    else if (!save_string_to_registry("token", token_item->valuestring)) {
-                        VPRINT(1, "[ERROR] Failed to save token to registry (insufficient permissions?)\n");
-                        ret = -7;
                     } else {
                         ret = 0; // SUCCESS ✅
                     }
