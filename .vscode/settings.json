@@ -7,6 +7,7 @@
         "tracelog.h": "c",
         "cjson.h": "c",
         "ws2tcpip.h": "c",
-        "config.h": "c"
+        "config.h": "c",
+        "dns.h": "c"
     }
 }

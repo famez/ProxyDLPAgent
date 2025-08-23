@@ -247,3 +247,9 @@ void dns_table_add_cname(dns_table_t *table, const char *alias, const char *cano
 
     VPRINT(2, "[INFO] CNAME: %s -> %s (stored in same entry)\n", alias, canonical);
 }
+
+BOOL add_domains_to_monitor(char **domain_list, int num_domains) {
+    VPRINT(2, "[INFO] add_domains_to_monitor call\n");
+
+    return TRUE;
+}

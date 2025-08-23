@@ -12,6 +12,12 @@
 #include "https_client.h"
 #include "tracelog.h"
 #include "config.h"
+#include "dns.h"
+
+typedef struct {
+    char *data;
+    size_t size;
+} MemoryStruct;
 
 
 struct response_string {
@@ -23,6 +29,23 @@ void init_response_string(struct response_string *s) {
     s->len = 0;
     s->ptr = malloc(1);  // start with empty string
     s->ptr[0] = '\0';
+}
+
+size_t write_callback_store(void *ptr, size_t size, size_t nmemb, void *userdata) {
+    size_t total_size = size * nmemb;
+    MemoryStruct *mem = (MemoryStruct *)userdata;
+
+    char *tmp = realloc(mem->data, mem->size + total_size + 1);
+    if (!tmp) {
+        fprintf(stderr, "[ERROR] Not enough memory for response\n");
+        return 0; // curl will abort
+    }
+
+    mem->data = tmp;
+    memcpy(&(mem->data[mem->size]), ptr, total_size);
+    mem->size += total_size;
+    mem->data[mem->size] = '\0'; // null-terminate
+    return total_size;
 }
 
 
@@ -326,10 +349,8 @@ int get_urls_to_monitor() {
     long http_code = 0;
     int ret = -1;
 
-    // Get guid and token from config
     const char *guid = get_guid();
     const char *token = get_token();
-
     if (!guid || !token) {
         fprintf(stderr, "[ERROR] Missing guid or token\n");
         return -2;
@@ -338,50 +359,80 @@ int get_urls_to_monitor() {
     char auth_header[512];
     snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
 
-    // Build URL with guid in query
     char url[1024];
     snprintf(url, sizeof(url), "%s%s?guid=%s", BASE_URL, MON_URLS_ENDPOINT, guid);
-
     VPRINT(1, "[DEBUG] Request URL: %s\n", url);
 
+    MemoryStruct response = {0}; // buffer for response
+
     curl = curl_easy_init();
-    if (!curl) {
-        VPRINT(1, "[ERROR] Failed to create CURL handle.\n");
-        return -3;
-    }
+    if (!curl) return -3;
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_store);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
-    // Headers
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, auth_header);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-    // Debug/SSL
     curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
     res = curl_easy_perform(curl);
-
     if (res != CURLE_OK) {
         fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         ret = -4;
-    } else {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code != 200) {
-            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
-            ret = -5;
-        } else {
-            VPRINT(1, "[INFO] GET request completed successfully.\n");
-            ret = 0; // success
+        goto cleanup;
+    }
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code != 200) {
+        fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+        ret = -5;
+        goto cleanup;
+    }
+
+    // Parse JSON
+    cJSON *root = cJSON_Parse(response.data);
+    if (!root) {
+        fprintf(stderr, "[ERROR] Failed to parse JSON\n");
+        ret = -6;
+        goto cleanup;
+    }
+
+    cJSON *domains = cJSON_GetObjectItem(root, "domains");
+    if (!cJSON_IsArray(domains)) {
+        fprintf(stderr, "[ERROR] 'domains' is not an array\n");
+        cJSON_Delete(root);
+        ret = -7;
+        goto cleanup;
+    }
+
+    // Build a C array of strings
+    int num_domains = cJSON_GetArraySize(domains);
+    char **domain_list = malloc(num_domains * sizeof(char*));
+    for (int i = 0; i < num_domains; i++) {
+        cJSON *domain_item = cJSON_GetArrayItem(domains, i);
+        if (cJSON_IsString(domain_item)) {
+            domain_list[i] = domain_item->valuestring;
         }
     }
 
+    if (add_domains_to_monitor(domain_list, num_domains)) {
+        ret = 0; // success
+    } else {
+        fprintf(stderr, "[ERROR] add_domains_to_monitor failed\n");
+        ret = -8;
+    }
+
+    free(domain_list);
+    cJSON_Delete(root);
+
+cleanup:
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-
+    free(response.data);
     return ret;
 }
