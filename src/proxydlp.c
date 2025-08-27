@@ -11,13 +11,10 @@
 #include "windivert.h"
 
 #include "dns.h"
+#include "monitor.h"
 
 #define MAXBUF          0xFFFF
-#define PROXY_IP        "192.168.0.15"
-#define PROXY_PORT      8080
-#define HTTP_PORT       80
-#define HTTPS_PORT      443
-#define DNS_PORT        53
+
 
 typedef struct {
     UINT32 orig_dst_ip;
@@ -68,12 +65,9 @@ UINT32 install_filter(){
     //We listen to outbound HTTP and HTTPS requests and also to incoming requests from the src proxy IP and port.
 
     r = snprintf(filter, sizeof(filter),
-        "(outbound and tcp.DstPort == %d) or "
-        "(outbound and tcp.DstPort == %d) or "
-        "(inbound and tcp.SrcPort == %d and ip.SrcAddr == %s) or "
         "(outbound and udp.DstPort == %d) or "
         "(inbound and udp.SrcPort == %d)",
-        HTTP_PORT, HTTPS_PORT, PROXY_PORT, PROXY_IP, DNS_PORT, DNS_PORT);
+        DNS_PORT, DNS_PORT);
 
     if (r < 0 || r >= sizeof(filter)) {
         error("failed to create filter string");
@@ -106,9 +100,15 @@ UINT32 intercept_packets_loop() {
 
     while (1) {
         if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
-            fprintf(stderr, "failed to read packet (%ld)\n", GetLastError());
+            DWORD err = GetLastError();
+            if (err == ERROR_INVALID_HANDLE) {
+                // Filter was reinstalled, just retry
+                continue;
+            }
+            fprintf(stderr, "failed to read packet (%lu)\n", err);
             continue;
         }
+
 
         if (!WinDivertHelperParsePacket(packet, packet_len, &ip_header, NULL, NULL,
                                         NULL, NULL, &tcp_header, &udp_header, (PVOID *)&payload, &payload_len, NULL, NULL)) {

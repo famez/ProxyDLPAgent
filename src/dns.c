@@ -2,9 +2,11 @@
 #include <stdio.h>
 #include <windows.h>
 #include <string.h>
+#include <shlwapi.h>
 
 #include "windivert.h"
 #include "tracelog.h"
+#include "monitor.h"
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
@@ -43,6 +45,32 @@ dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname);
 void dns_entry_add_hostname(dns_entry_t *entry, const char *hostname);
 void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip);
 void dns_table_add_cname(dns_table_t *table, const char *alias, const char *canonical);
+
+typedef struct dns_domains {
+    char **domain_list;
+    int num_domains;
+} dns_domains_t;
+
+dns_domains_t dns_monitored_domains_table;
+
+
+// Case-insensitive substring check
+static BOOL dns_entry_matches_monitored(const dns_entry_t *entry) {
+    for (int i = 0; i < entry->num_hostnames; i++) {
+        const char *hostname = entry->hostnames[i];
+
+        for (int j = 0; j < dns_monitored_domains_table.num_domains; j++) {
+            const char *monitored = dns_monitored_domains_table.domain_list[j];
+
+            // Check if monitored string is a substring of the hostname
+            if (StrStrIA(hostname, monitored) != NULL) {  
+                return TRUE;  // match found
+            }
+        }
+    }
+    return FALSE;
+}
+
 
 
 static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
@@ -148,6 +176,16 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
     // Answers
     for (int i = 0; i < ntohs(hdr->ancount); i++) {
         const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len, &g_dns_table);
+
+        //Add the IPs for the monitored domains as IPs to be filtered by Windivert
+        const dns_entry_t *last_entry = &g_dns_table.entries[g_dns_table.num_entries-1];
+        if (dns_entry_matches_monitored(last_entry)) {
+            add_addrs_for_monitoring(last_entry->ipv4_addresses,
+                                    last_entry->num_addresses);
+        } else {
+            VPRINT(2, "[DNS] Skipping domain (not in monitored list)\n");
+        }
+
         if (!new_ptr) return;
         ptr = new_ptr;
     }
@@ -248,8 +286,21 @@ void dns_table_add_cname(dns_table_t *table, const char *alias, const char *cano
     VPRINT(2, "[INFO] CNAME: %s -> %s (stored in same entry)\n", alias, canonical);
 }
 
+void free_domains_list() {
+    for (int i = 0; i < dns_monitored_domains_table.num_domains; i++) {
+        if (dns_monitored_domains_table.domain_list[i]) {
+            free(dns_monitored_domains_table.domain_list[i]);  // free each string
+        }
+    }
+
+    free(dns_monitored_domains_table.domain_list); // free the list itself
+}
+
 BOOL add_domains_to_monitor(char **domain_list, int num_domains) {
     VPRINT(2, "[INFO] add_domains_to_monitor call\n");
+
+    dns_monitored_domains_table.domain_list = domain_list;
+    dns_monitored_domains_table.num_domains = num_domains;
 
     return TRUE;
 }

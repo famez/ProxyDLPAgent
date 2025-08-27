@@ -413,10 +413,30 @@ int get_urls_to_monitor() {
     // Build a C array of strings
     int num_domains = cJSON_GetArraySize(domains);
     char **domain_list = malloc(num_domains * sizeof(char*));
+    if (!domain_list) {
+        fprintf(stderr, "[ERROR] malloc failed\n");
+        ret = -9;
+        cJSON_Delete(root);
+        return ret;
+    }
+
     for (int i = 0; i < num_domains; i++) {
         cJSON *domain_item = cJSON_GetArrayItem(domains, i);
         if (cJSON_IsString(domain_item)) {
-            domain_list[i] = domain_item->valuestring;
+            // Copy the string so we own it
+            domain_list[i] = strdup(domain_item->valuestring);
+            if (!domain_list[i]) {
+                fprintf(stderr, "[ERROR] strdup failed\n");
+                // free already allocated strings
+                for (int j = 0; j < i; j++) {
+                    free(domain_list[j]);
+                }
+                free(domain_list);
+                cJSON_Delete(root);
+                return -10;
+            }
+        } else {
+            domain_list[i] = NULL; // handle non-string gracefully
         }
     }
 
@@ -427,7 +447,7 @@ int get_urls_to_monitor() {
         ret = -8;
     }
 
-    free(domain_list);
+    // domain_list and strings are freed inside add_domains_to_monitor
     cJSON_Delete(root);
 
 cleanup:
