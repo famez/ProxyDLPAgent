@@ -14,7 +14,8 @@
 #include "monitor.h"
 
 #define MAXBUF          0xFFFF
-
+#define MAX_CONN 1024
+#define IDLE_TIMEOUT 300  // seconds (5 min)conn_entry_t conn_table[MAX_CONN];
 
 typedef struct {
     UINT32 orig_dst_ip;
@@ -25,9 +26,11 @@ typedef struct {
     UINT32 proxy_dst_ip;
     UINT16 proxy_dst_port;
     UINT16 proxy_src_port; // new source port after rewriting if any
+    
+    time_t last_seen; // internal tracking
 } conn_entry_t;
 
-#define MAX_CONN 1024
+
 conn_entry_t conn_table[MAX_CONN];
 int conn_count = 0;
 
@@ -53,6 +56,50 @@ static UINT32 ip_str_to_u32(const char *ip_str) {
     }
     return ip; // already in network byte order
 }
+
+// ---------------- Utility ----------------
+
+
+static void conn_remove_at(int idx)
+{
+    if (idx < conn_count - 1) {
+        memmove(&conn_table[idx], &conn_table[idx + 1],
+                (conn_count - idx - 1) * sizeof(conn_entry_t));
+    }
+    conn_count--;
+}
+
+
+void remove_connection(conn_entry_t *entry)
+{
+    int idx = (int)((conn_entry_t*)entry - conn_table);
+    if (idx >= 0 && idx < conn_count) {
+        conn_remove_at(idx);
+    }
+}
+
+void update_connection_seen(conn_entry_t *entry)
+{
+    if (entry) {
+        ((conn_entry_t*)entry)->last_seen = time(NULL);
+    }
+}
+
+void cleanup_connections()
+{
+    time_t now = time(NULL);
+    for (int i = 0; i < conn_count; ) {
+        if (now - conn_table[i].last_seen > IDLE_TIMEOUT) {
+            fprintf(stderr, "[CONN] Removing idle connection src=%u:%u -> dst=%u:%u\n",
+                    conn_table[i].orig_src_ip, conn_table[i].orig_src_port,
+                    conn_table[i].orig_dst_ip, conn_table[i].orig_dst_port);
+            conn_remove_at(i);
+        } else {
+            i++;
+        }
+    }
+}
+
 
 
 UINT32 install_filter(){
@@ -162,8 +209,29 @@ int find_conn_inbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_
 }
 
 UINT16 get_unused_src_port() {
-    return (UINT16)(1024 + (rand() % (65535 - 1024)));
+    UINT16 port;
+    int tries = 0;
+    const int max_tries = 1000;
+
+    do {
+        port = (UINT16)(1024 + (rand() % (65535 - 1024)));
+        int conflict = 0;
+        for (int i = 0; i < conn_count; i++) {
+            if (conn_table[i].proxy_src_port == htons(port)) {
+                conflict = 1;
+                break;
+            }
+        }
+        if (!conflict) {
+            return port;
+        }
+        tries++;
+    } while (tries < max_tries);
+
+    fprintf(stderr, "[WARN] Could not find unused source port after %d tries, returning random\n", max_tries);
+    return port; // fallback
 }
+
 
 UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header,
     const PWINDIVERT_UDPHDR udp_header, UINT8 *packet, UINT packet_len, UINT8 *payload, UINT payload_len) {
@@ -209,6 +277,8 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
     const PWINDIVERT_TCPHDR tcp_header, UINT8 *packet, UINT packet_len) {
 
+    int idx = -1;
+
     if (addr->Outbound) {
         VPRINT(1, "Outbound packet intercepted");
         if (VERBOSITY >= 3) {
@@ -217,7 +287,9 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             fprintf(stderr, "\n");
         }
 
-        int idx = find_conn_outbound(ip_header->SrcAddr, tcp_header->SrcPort,
+        
+
+        idx = find_conn_outbound(ip_header->SrcAddr, tcp_header->SrcPort,
                                         ip_header->DstAddr, tcp_header->DstPort);
         conn_entry_t *entry;
 
@@ -231,6 +303,8 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             }
 
             UINT16 new_src_port = get_unused_src_port();
+
+            idx = conn_count;
 
             entry = &conn_table[conn_count++];
             entry->orig_src_ip = ip_header->SrcAddr;
@@ -278,7 +352,7 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             fprintf(stderr, "\n");
         }
 
-        int idx = find_conn_inbound(ip_header->SrcAddr, tcp_header->SrcPort,
+        idx = find_conn_inbound(ip_header->SrcAddr, tcp_header->SrcPort,
                                     ip_header->DstAddr, tcp_header->DstPort);
         if (idx < 0) {
             VPRINT(2, "No matching connection found, forwarding unchanged");
@@ -309,6 +383,33 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
         }
     }
 
+    //Purge closed or timeout connections  
+    conn_entry_t *entry = &conn_table[idx];
+
+    if (tcp_header->Rst) {
+        remove_connection(entry);
+        if (VERBOSITY >= 3) {
+            fprintf(stderr, "[CONN] Removed (RST)\n");
+            fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+            fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+            fprintf(stderr, "\n");
+        }
+                
+        
+    } else if (tcp_header->Fin) {
+        remove_connection(entry);
+        if (VERBOSITY >= 3) {
+            fprintf(stderr, "[CONN] Removed (FIN)\n");
+            fprintf(stderr, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
+            fprintf(stderr, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+            fprintf(stderr, "\n");
+        }
+        
+    } else {
+
+        update_connection_seen(entry);
+    }
+    
     return 0;
 
 }
