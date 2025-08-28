@@ -409,6 +409,8 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 
         update_connection_seen(entry);
     }
+
+    cleanup_connections();
     
     return 0;
 
