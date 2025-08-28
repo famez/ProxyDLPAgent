@@ -226,7 +226,8 @@ dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname) {
     if (entry) return entry;
 
     if (table->num_entries >= MAX_DNS_ENTRIES) {
-        VPRINT(1, "[WARN] DNS table full, cannot add entry for %s\n", hostname);
+        table->num_entries = 0;
+        VPRINT(1, "[WARN] DNS table full, overwriting old entries in circular buffer %s\n", hostname);
         return NULL;
     }
 
