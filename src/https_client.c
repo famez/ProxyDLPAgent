@@ -8,11 +8,11 @@
 #include <lm.h>
 #include <cJSON.h>
 
-
 #include "https_client.h"
 #include "tracelog.h"
 #include "config.h"
 #include "dns.h"
+#include "telemetry.h"
 
 typedef struct {
     char *data;
@@ -180,8 +180,11 @@ int send_heartbeat() {
     get_logged_in_users(logged_users, sizeof(logged_users));
     get_ip_addresses(ip_addresses, sizeof(ip_addresses));
 
-    // Get guid and token from registry
+    //Get telemetry data
+    size_t out_count;
+    HostEntry* telemetry_entries = get_telemetry_data(&out_count);
 
+    // Get guid and token from registry
     const char * guid = get_guid();
     const char * token = get_token();
 
@@ -201,6 +204,24 @@ int send_heartbeat() {
     cJSON_AddStringToObject(root, "ip_addresses", ip_addresses);
     cJSON_AddStringToObject(root, "agent_version", agent_version);
     cJSON_AddStringToObject(root, "guid", guid);
+
+    // Add telemetry data as a JSON object
+    cJSON *telemetry_json = cJSON_CreateObject();
+    if (telemetry_json) {
+        for (size_t i = 0; i < out_count; ++i) {
+            cJSON *ip_array = cJSON_CreateArray();
+            for (size_t j = 0; j < telemetry_entries[i].ip_count; ++j) {
+                struct in_addr addr;
+                addr.s_addr = htonl(telemetry_entries[i].ips[j].ip);  // convert to network byte order
+                const char *ip_str = inet_ntoa(addr);
+                cJSON_AddItemToArray(ip_array, cJSON_CreateString(ip_str));
+            }
+            cJSON_AddItemToObject(telemetry_json, telemetry_entries[i].hostname, ip_array);
+        }
+        cJSON_AddItemToObject(root, "telemetry", telemetry_json);
+    }
+
+    free_telemetry_data(telemetry_entries, out_count);
 
     char *json_data = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

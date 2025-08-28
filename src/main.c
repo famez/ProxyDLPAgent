@@ -12,9 +12,12 @@
 #include "https_client.h"
 #include "config.h"
 #include "heartbeat.h"
+#include "telemetry.h"
 
 
 int main() {
+
+    init_telemetry();
 
     init_https();
     

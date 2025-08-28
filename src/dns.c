@@ -7,6 +7,8 @@
 #include "windivert.h"
 #include "tracelog.h"
 #include "monitor.h"
+#include "telemetry.h"
+#include "heartbeat.h"
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
@@ -178,10 +180,13 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
         const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len, &g_dns_table);
 
         //Add the IPs for the monitored domains as IPs to be filtered by Windivert
-        const dns_entry_t *last_entry = &g_dns_table.entries[g_dns_table.num_entries-1];
+        dns_entry_t *last_entry = &g_dns_table.entries[g_dns_table.num_entries-1];
         if (dns_entry_matches_monitored(last_entry)) {
             add_addrs_for_monitoring(last_entry->ipv4_addresses,
                                     last_entry->num_addresses);
+            update_telemetry_data_multiple(last_entry->hostnames[0], last_entry->ipv4_addresses, 
+                last_entry->num_addresses);
+                request_heartbeat();
         } else {
             VPRINT(2, "[DNS] Skipping domain (not in monitored list)\n");
         }
