@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <time.h>
 
 #include "heartbeat.h"
 #include "https_client.h"
