@@ -12,9 +12,11 @@ BOOL save_values_to_registry();
 
 const char* get_guid();
 const char* get_token();
+const char* get_proxy_hostname();
 
 void set_guid(const char *new_guid);
 void set_token(const char *new_token);
+
 
 
 #endif

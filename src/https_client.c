@@ -241,7 +241,11 @@ int send_heartbeat() {
         return -6;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, BASE_URL HEARTBEAT_ENDPOINT);
+    const char *hostname = get_proxy_hostname();
+    char base_url[256];
+    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" HEARTBEAT_ENDPOINT, hostname);
+
+    curl_easy_setopt(curl, CURLOPT_URL, base_url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data);
 
@@ -298,7 +302,11 @@ int register_agent() {
         return -2; // CURL init failed
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, BASE_URL REGISTER_ENDPOINT);
+    const char *hostname = get_proxy_hostname();
+    char base_url[256];
+    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" REGISTER_ENDPOINT, hostname);
+
+    curl_easy_setopt(curl, CURLOPT_URL, base_url);
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_register_agent);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
@@ -381,7 +389,11 @@ int get_urls_to_monitor() {
     snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
 
     char url[1024];
-    snprintf(url, sizeof(url), "%s%s?guid=%s", BASE_URL, MON_URLS_ENDPOINT, guid);
+
+    const char *hostname = get_proxy_hostname();
+    char base_url[256];
+    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" MON_URLS_ENDPOINT, hostname);
+    snprintf(url, sizeof(url), "%s?guid=%s", base_url, guid);
     VPRINT(1, "[DEBUG] Request URL: %s\n", url);
 
     MemoryStruct response = {0}; // buffer for response

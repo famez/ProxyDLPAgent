@@ -4,6 +4,7 @@
 
 static char guid[256] = {0};
 static char token[256] = {0}; 
+static char proxy_hostname[256] = {0}; 
 
 BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffer_size) {
     HKEY hKey;
@@ -64,8 +65,9 @@ BOOL save_values_to_registry() {
 
 BOOL load_values_from_registry() {
 
-    return (read_string_from_registry("guid", guid, sizeof(guid)) 
-    && read_string_from_registry("token", token, sizeof(token)));
+    return (read_string_from_registry("ProxyHostname", proxy_hostname, sizeof(guid))
+        && read_string_from_registry("guid", guid, sizeof(guid)) 
+        && read_string_from_registry("token", token, sizeof(token)));
 
 }
 
@@ -85,3 +87,8 @@ void set_token(const char *new_token) {
 
 const char* get_guid() { return guid; }
 const char* get_token() { return token; }
+
+
+const char* get_proxy_hostname() {
+    return proxy_hostname;
+}
