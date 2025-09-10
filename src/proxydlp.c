@@ -17,6 +17,8 @@
 #define MAX_CONN 1024
 #define IDLE_TIMEOUT 300  // seconds (5 min)conn_entry_t conn_table[MAX_CONN];
 
+extern volatile int g_Running;
+
 typedef struct {
     UINT32 orig_dst_ip;
     UINT16 orig_dst_port;
@@ -145,7 +147,7 @@ UINT32 intercept_packets_loop() {
     UINT8 *payload;
     UINT payload_len;
 
-    while (1) {
+    while (g_Running) {
         if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
             DWORD err = GetLastError();
             if (err == ERROR_INVALID_HANDLE) {

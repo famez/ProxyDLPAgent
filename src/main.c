@@ -5,12 +5,18 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <pthread.h>
+
 
 #include "proxydlp.h"
 #include "https_client.h"
 #include "config.h"
 #include "heartbeat.h"
 #include "telemetry.h"
+
+pthread_t workerThread;
+volatile int g_Running = 1;
+
 
 // --- Globals for Service Control ---
 SERVICE_STATUS ServiceStatus;
@@ -21,6 +27,12 @@ HANDLE stopEvent;
 void WINAPI ServiceMain(DWORD argc, LPTSTR *argv);
 void WINAPI ServiceCtrlHandler(DWORD ctrlCode);
 void RunProxyDLP();
+
+void* ProxyDLPThread(void* arg) {
+    RunProxyDLP();
+    return NULL;
+}
+
 
 // --- Entry point ---
 int main(int argc, char* argv[]) {
@@ -57,11 +69,21 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv) {
     // Create stop event
     stopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
-    // Run your agent logic
-    RunProxyDLP();
+    if (pthread_create(&workerThread, NULL, ProxyDLPThread, NULL) != 0) {
+        ServiceStatus.dwCurrentState = SERVICE_STOPPED;
+        ServiceStatus.dwWin32ExitCode = 1;
+        SetServiceStatus(hStatus, &ServiceStatus);
+        return;
+    }
 
     // Wait until stop requested
     WaitForSingleObject(stopEvent, INFINITE);
+
+    // Tell loop to stop
+    g_Running = 0;
+
+    // Wait for worker to exit
+    pthread_join(workerThread, NULL);
 
     // Cleanup before stopping
     ServiceStatus.dwCurrentState = SERVICE_STOPPED;
