@@ -9,6 +9,8 @@
         "ws2tcpip.h": "c",
         "config.h": "c",
         "dns.h": "c",
-        "monitor.h": "c"
+        "monitor.h": "c",
+        "stdio.h": "c",
+        "proxydlp.h": "c"
     }
 }
