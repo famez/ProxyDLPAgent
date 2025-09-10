@@ -93,7 +93,7 @@ void add_addrs_for_monitoring(const uint32_t *ips, int count) {
     // Open new handle
     handle = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
     if (handle == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[MONITOR] Failed to open WinDivert with new filter (%lu)\n",
+        VPRINT(1, "[MONITOR] Failed to open WinDivert with new filter (%lu)\n",
                 GetLastError());
         exit(EXIT_FAILURE);
     }

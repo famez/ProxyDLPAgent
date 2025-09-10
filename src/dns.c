@@ -149,16 +149,16 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
     unsigned char *src_bytes = (unsigned char *)&ip_header->SrcAddr;
     unsigned char *dst_bytes = (unsigned char *)&ip_header->DstAddr;
 
-    fprintf(stderr, "[DNS] Packet from %u.%u.%u.%u:%u to %u.%u.%u.%u:%u\n",
+    VPRINT(3, "[DNS] Packet from %u.%u.%u.%u:%u to %u.%u.%u.%u:%u\n",
         src_bytes[0], src_bytes[1], src_bytes[2], src_bytes[3], ntohs(udp_header->SrcPort),
         dst_bytes[0], dst_bytes[1], dst_bytes[2], dst_bytes[3], ntohs(udp_header->DstPort));
 
     if (payload_len < sizeof(struct dns_header)) return;
     const struct dns_header *hdr = (const struct dns_header *)payload;
 
-    fprintf(stderr, "ID: %u\n", ntohs(hdr->id));
-    fprintf(stderr, "Questions: %u\n", ntohs(hdr->qdcount));
-    fprintf(stderr, "Answers: %u\n", ntohs(hdr->ancount));
+    VPRINT(3, "ID: %u\n", ntohs(hdr->id));
+    VPRINT(3, "Questions: %u\n", ntohs(hdr->qdcount));
+    VPRINT(3, "Answers: %u\n", ntohs(hdr->ancount));
 
     const uint8_t *ptr = payload + sizeof(struct dns_header);
 
@@ -172,7 +172,7 @@ void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR
         if ((size_t)(ptr - payload) + 4 > payload_len) return;
         uint16_t qtype = ntohs(*(uint16_t *)ptr); ptr += 2;
         uint16_t qclass = ntohs(*(uint16_t *)ptr); ptr += 2;
-        fprintf(stderr, "Query: %s, Type: %u, Class: %u\n", name, qtype, qclass);
+        VPRINT(3, "Query: %s, Type: %u, Class: %u\n", name, qtype, qclass);
     }
 
     // Answers

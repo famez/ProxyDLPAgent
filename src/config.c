@@ -1,6 +1,8 @@
 #include <stdio.h>
 
 #include "config.h"
+#include "tracelog.h"
+
 
 static char guid[256] = {0};
 static char token[256] = {0}; 
@@ -10,7 +12,7 @@ BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffe
     HKEY hKey;
     LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\ProxyDlp", 0, KEY_READ, &hKey);
     if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] Failed to open registry key (error %ld)\n", result);
+        VPRINT(1, "[ERROR] Failed to open registry key (error %ld)\n", result);
         return FALSE;
     }
 
@@ -19,7 +21,7 @@ BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffe
     RegCloseKey(hKey);
 
     if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] Failed to read registry value %s (error %ld)\n", value_name, result);
+        VPRINT(1, "[ERROR] Failed to read registry value %s (error %ld)\n", value_name, result);
         return FALSE;
     }
 
@@ -37,7 +39,7 @@ BOOL save_string_to_registry(const char *value_name, const char *value_data) {
     );
 
     if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] RegCreateKeyExA failed (%ld)\n", result);
+        VPRINT(1, "[ERROR] RegCreateKeyExA failed (%ld)\n", result);
         return FALSE;
     }
 
@@ -50,7 +52,7 @@ BOOL save_string_to_registry(const char *value_name, const char *value_data) {
     RegCloseKey(hKey);
 
     if (result != ERROR_SUCCESS) {
-        fprintf(stderr, "[ERROR] RegSetValueExA failed (%ld)\n", result);
+        VPRINT(1, "[ERROR] RegSetValueExA failed (%ld)\n", result);
         return FALSE;
     }
 

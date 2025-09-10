@@ -37,7 +37,7 @@ size_t write_callback_store(void *ptr, size_t size, size_t nmemb, void *userdata
 
     char *tmp = realloc(mem->data, mem->size + total_size + 1);
     if (!tmp) {
-        fprintf(stderr, "[ERROR] Not enough memory for response\n");
+        VPRINT(1, "[ERROR] Not enough memory for response\n");
         return 0; // curl will abort
     }
 
@@ -194,7 +194,7 @@ int send_heartbeat() {
     // Build JSON with cJSON
     cJSON *root = cJSON_CreateObject();
     if (!root) {
-        fprintf(stderr, "[ERROR] Failed to create JSON object\n");
+        VPRINT(3, "[ERROR] Failed to create JSON object\n");
         return -4;
     }
 
@@ -227,7 +227,7 @@ int send_heartbeat() {
     cJSON_Delete(root);
 
     if (!json_data) {
-        fprintf(stderr, "[ERROR] Failed to print JSON payload\n");
+        VPRINT(1, "[ERROR] Failed to print JSON payload\n");
         return -5;
     }
 
@@ -264,12 +264,12 @@ int send_heartbeat() {
     res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
-        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        VPRINT(1, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         ret = -7;
     } else {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code != 200) {
-            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+            VPRINT(1, "[ERROR] Server returned HTTP %ld\n", http_code);
             ret = -8;
         } else {
             VPRINT(1, "[INFO] POST request completed successfully.\n");
@@ -320,14 +320,14 @@ int register_agent() {
     res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
-        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n",
+        VPRINT(1, "[ERROR] curl_easy_perform() failed: %s\n",
                 curl_easy_strerror(res));
         ret = -3; // network error
     } else {
         // Check HTTP response code
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code != 200) {
-            fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+            VPRINT(1, "[ERROR] Server returned HTTP %ld\n", http_code);
             ret = -4; // bad HTTP response
         } else {
             VPRINT(2, "[INFO] GET request completed successfully.\n");
@@ -381,7 +381,7 @@ int get_urls_to_monitor() {
     const char *guid = get_guid();
     const char *token = get_token();
     if (!guid || !token) {
-        fprintf(stderr, "[ERROR] Missing guid or token\n");
+        VPRINT(1, "[ERROR] Missing guid or token\n");
         return -2;
     }
 
@@ -415,14 +415,14 @@ int get_urls_to_monitor() {
 
     res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
-        fprintf(stderr, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        VPRINT(1, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         ret = -4;
         goto cleanup;
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     if (http_code != 200) {
-        fprintf(stderr, "[ERROR] Server returned HTTP %ld\n", http_code);
+        VPRINT(1, "[ERROR] Server returned HTTP %ld\n", http_code);
         ret = -5;
         goto cleanup;
     }
@@ -430,14 +430,14 @@ int get_urls_to_monitor() {
     // Parse JSON
     cJSON *root = cJSON_Parse(response.data);
     if (!root) {
-        fprintf(stderr, "[ERROR] Failed to parse JSON\n");
+        VPRINT(1, "[ERROR] Failed to parse JSON\n");
         ret = -6;
         goto cleanup;
     }
 
     cJSON *domains = cJSON_GetObjectItem(root, "domains");
     if (!cJSON_IsArray(domains)) {
-        fprintf(stderr, "[ERROR] 'domains' is not an array\n");
+        VPRINT(1, "[ERROR] 'domains' is not an array\n");
         cJSON_Delete(root);
         ret = -7;
         goto cleanup;
@@ -447,7 +447,7 @@ int get_urls_to_monitor() {
     int num_domains = cJSON_GetArraySize(domains);
     char **domain_list = malloc(num_domains * sizeof(char*));
     if (!domain_list) {
-        fprintf(stderr, "[ERROR] malloc failed\n");
+        VPRINT(1, "[ERROR] malloc failed\n");
         ret = -9;
         cJSON_Delete(root);
         return ret;
@@ -459,7 +459,7 @@ int get_urls_to_monitor() {
             // Copy the string so we own it
             domain_list[i] = strdup(domain_item->valuestring);
             if (!domain_list[i]) {
-                fprintf(stderr, "[ERROR] strdup failed\n");
+                VPRINT(1, "[ERROR] strdup failed\n");
                 // free already allocated strings
                 for (int j = 0; j < i; j++) {
                     free(domain_list[j]);
@@ -476,7 +476,7 @@ int get_urls_to_monitor() {
     if (add_domains_to_monitor(domain_list, num_domains)) {
         ret = 0; // success
     } else {
-        fprintf(stderr, "[ERROR] add_domains_to_monitor failed\n");
+        VPRINT(1, "[ERROR] add_domains_to_monitor failed\n");
         ret = -8;
     }
 
