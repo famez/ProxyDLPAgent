@@ -147,17 +147,25 @@ UINT32 intercept_packets_loop() {
     UINT8 *payload;
     UINT payload_len;
 
-    while (g_Running) {
-        if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
-            DWORD err = GetLastError();
-            if (err == ERROR_INVALID_HANDLE) {
-                // Filter was reinstalled, just retry
-                continue;
-            }
-            fprintf(stderr, "failed to read packet (%lu)\n", err);
-            continue;
-        }
+    OVERLAPPED ov = {0};
+    ov.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
+
+    while (g_Running) {
+
+        BOOL ok = WinDivertRecvEx(handle, packet, sizeof(packet), &packet_len, 0, &addr, NULL, &ov);
+
+        if(!ok && GetLastError() == ERROR_IO_PENDING) {
+            DWORD wait = WaitForSingleObject(ov.hEvent, 5000); // 5 second timeout
+            if (wait == WAIT_TIMEOUT) {
+            CancelIo(handle);
+            VPRINT(3, "Timed out\n");
+            continue;
+            } else {
+                GetOverlappedResult(handle, &ov, (PDWORD)&packet_len, FALSE);
+                VPRINT(3, "Got a packet!\n");
+            }
+        }
 
         if (!WinDivertHelperParsePacket(packet, packet_len, &ip_header, NULL, NULL,
                                         NULL, NULL, &tcp_header, &udp_header, (PVOID *)&payload, &payload_len, NULL, NULL)) {
