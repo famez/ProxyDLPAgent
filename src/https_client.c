@@ -372,6 +372,69 @@ int register_agent() {
     return ret;
 }
 
+int deregister_agent() {
+    CURL *curl;
+    CURLcode res;
+    long http_code = 0;
+    int ret = -1;
+
+    const char *guid = get_guid();
+    const char *token = get_token();
+    if (!guid || !token) {
+        VPRINT(1, "[ERROR] Missing guid or token\n");
+        return -2;
+    }
+
+    // Prepare authorization header
+    char auth_header[512];
+    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token);
+
+    // Build deregister URL
+    char url[1024];
+    const char *hostname = get_proxy_hostname();
+    char base_url[256];
+    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" DEREGISTER_ENDPOINT, hostname);
+    snprintf(url, sizeof(url), "%s?guid=%s", base_url, guid);
+
+    VPRINT(1, "[DEBUG] Deregister URL: %s\n", url);
+
+    curl = curl_easy_init();
+    if (!curl) return -3;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, auth_header);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        VPRINT(1, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        ret = -4;
+        goto cleanup;
+    }
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code != 200) {
+        VPRINT(1, "[ERROR] Deregister failed, HTTP %ld\n", http_code);
+        ret = -5;
+        goto cleanup;
+    }
+
+    VPRINT(1, "[INFO] Deregister successful\n");
+    ret = 0; // success
+
+cleanup:
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return ret;
+}
+
+
 int get_urls_to_monitor() {
     CURL *curl;
     CURLcode res;

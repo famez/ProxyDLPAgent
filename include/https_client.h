@@ -1,12 +1,14 @@
 #ifndef HTTPSCLIENT_H
 #define HTTPSCLIENT_H
 
-#define REGISTER_ENDPOINT   "register"
-#define HEARTBEAT_ENDPOINT  "heartbeat"
-#define MON_URLS_ENDPOINT  "monitored_domains"
+#define REGISTER_ENDPOINT       "register"
+#define DEREGISTER_ENDPOINT     "deregister"
+#define HEARTBEAT_ENDPOINT      "heartbeat"
+#define MON_URLS_ENDPOINT       "monitored_domains"
 
 
 int register_agent();
+int deregister_agent();
 
 int send_heartbeat();
 

@@ -27,6 +27,7 @@ HANDLE stopEvent;
 void WINAPI ServiceMain(DWORD argc, LPTSTR *argv);
 void WINAPI ServiceCtrlHandler(DWORD ctrlCode);
 void RunProxyDLP();
+void DeregisterAgent();
 
 void* ProxyDLPThread(void* arg) {
     RunProxyDLP();
@@ -36,6 +37,17 @@ void* ProxyDLPThread(void* arg) {
 
 // --- Entry point ---
 int main(int argc, char* argv[]) {
+
+    // Check for command-line arguments first
+    if (argc > 1) {
+        if (_stricmp(argv[1], "/deregister") == 0) {
+            DeregisterAgent();  // <-- your function to remove/unregister service
+            return 0;
+        }
+
+    }
+
+
     SERVICE_TABLE_ENTRY ServiceTable[] = {
         { "ProxyDLPAgent", (LPSERVICE_MAIN_FUNCTION)ServiceMain },
         { NULL, NULL }
@@ -106,7 +118,6 @@ void WINAPI ServiceCtrlHandler(DWORD ctrlCode) {
     }
 }
 
-// --- Your existing program logic wrapped here ---
 void RunProxyDLP() {
     init_telemetry();
     init_https();
@@ -127,4 +138,16 @@ void RunProxyDLP() {
 
     end_https();
     finish_heartbeat_worker();
+}
+
+
+void DeregisterAgent() {
+    
+    init_https();
+
+    if (load_values_from_registry()) {
+        deregister_agent();
+    }   
+
+    end_https();
 }
