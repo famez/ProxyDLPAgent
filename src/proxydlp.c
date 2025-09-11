@@ -281,7 +281,7 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
     int idx = -1;
 
     if (addr->Outbound) {
-        VPRINT(1, "Outbound packet intercepted");
+        VPRINT(3, "Outbound packet intercepted");
         VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
         VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
         VPRINT(3, "\n");
@@ -340,7 +340,7 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
         }
 
     } else {
-        VPRINT(1, "Inbound packet intercepted");
+        VPRINT(3, "Inbound packet intercepted");
         VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
         VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
         VPRINT(3, "\n");
