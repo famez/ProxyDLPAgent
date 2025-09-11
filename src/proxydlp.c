@@ -46,7 +46,7 @@ static void error(const char *msg) {
 
 static void print_ip_port(UINT32 ip, UINT16 port) {
     unsigned char *bytes = (unsigned char *)&ip;
-    VPRINT(1, "%u.%u.%u.%u:%u",
+    VPRINT(3, "%u.%u.%u.%u:%u",
         bytes[0], bytes[1], bytes[2], bytes[3], ntohs(port));
 }
 
