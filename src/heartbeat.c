@@ -16,6 +16,10 @@ static volatile int heartbeat_requested = 0;
 
 void* heartbeat_worker(void* arg) {
     struct timespec ts;
+    //Send heartbeat the first time
+    pthread_mutex_lock(&heartbeat_mutex);
+    send_heartbeat();
+    pthread_mutex_unlock(&heartbeat_mutex);
     
     while (running) {
         // Calculate timeout for 2 minutes
