@@ -156,7 +156,7 @@ UINT32 intercept_packets_loop() {
         BOOL ok = WinDivertRecvEx(handle, packet, sizeof(packet), &packet_len, 0, &addr, NULL, &ov);
 
         if(!ok && GetLastError() == ERROR_IO_PENDING) {
-            DWORD wait = WaitForSingleObject(ov.hEvent, 5000); // 5 second timeout
+            DWORD wait = WaitForSingleObject(ov.hEvent, 1000); // 1 second timeout
             if (wait == WAIT_TIMEOUT) {
             CancelIo(handle);
             VPRINT(3, "Timed out\n");
