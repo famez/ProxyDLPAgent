@@ -6,6 +6,8 @@
 #define HEARTBEAT_ENDPOINT      "heartbeat"
 #define MON_URLS_ENDPOINT       "monitored_domains"
 
+#define PROXYDLP_CA_FILE        "C:\\Program Files\\ProxyDLPAgent\\mitmCA.pem"
+
 
 int register_agent();
 int deregister_agent();

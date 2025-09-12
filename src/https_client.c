@@ -259,6 +259,7 @@ int send_heartbeat() {
     curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, PROXYDLP_CA_FILE);
 
     VPRINT(1, "[INFO] Performing HTTPS POST request...\n");
     res = curl_easy_perform(curl);
@@ -315,6 +316,7 @@ int register_agent() {
     curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, PROXYDLP_CA_FILE);
 
     VPRINT(1, "[INFO] Performing HTTPS GET request...\n");
     res = curl_easy_perform(curl);
@@ -406,6 +408,7 @@ int deregister_agent() {
     curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, PROXYDLP_CA_FILE);
 
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, auth_header);
@@ -475,6 +478,7 @@ int get_urls_to_monitor() {
     curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, PROXYDLP_CA_FILE);
 
     res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
