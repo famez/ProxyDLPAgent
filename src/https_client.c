@@ -212,7 +212,7 @@ int send_heartbeat() {
             cJSON *ip_array = cJSON_CreateArray();
             for (size_t j = 0; j < telemetry_entries[i].ip_count; ++j) {
                 struct in_addr addr;
-                addr.s_addr = htonl(telemetry_entries[i].ips[j].ip);  // convert to network byte order
+                addr.s_addr = telemetry_entries[i].ips[j].ip;  // convert to network byte order
                 const char *ip_str = inet_ntoa(addr);
                 cJSON_AddItemToArray(ip_array, cJSON_CreateString(ip_str));
             }
