@@ -13,6 +13,7 @@
 #include "config.h"
 #include "heartbeat.h"
 #include "telemetry.h"
+#include "tracelog.h"
 
 pthread_t workerThread;
 volatile int g_Running = 1;
@@ -119,6 +120,12 @@ void WINAPI ServiceCtrlHandler(DWORD ctrlCode) {
 }
 
 void RunProxyDLP() {
+
+    //Remove old logs
+    remove(LOG_FILE_PATH);
+
+    VPRINT(1, "ProxyDLP started\n");
+
     init_telemetry();
     init_https();
 
