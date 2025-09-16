@@ -9,6 +9,7 @@
 #include "tracelog.h"
 #include "proxydlp.h"
 #include "windivert.h"
+#include "config.h"
 
 #include "dns.h"
 #include "monitor.h"
@@ -311,7 +312,7 @@ UINT32 handle_conn_entry(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             }
 
             //Get IP address from hostname
-            char *proxy_ip = get_proxy_ip();
+            const char *proxy_ip = get_proxy_ip();
 
             UINT16 new_src_port = get_unused_src_port(entries);
 

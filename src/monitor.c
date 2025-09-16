@@ -53,7 +53,7 @@ static void rebuild_filter(char *filter, size_t filter_len) {
     }
 
     //Get proxy IP
-    char *proxy_ip = get_proxy_ip();
+    const char *proxy_ip = get_proxy_ip();
 
     // Finally, add inbound packets coming from the proxy itself
     char proxy_clause[2048];
