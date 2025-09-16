@@ -15,7 +15,7 @@
 
 #define MAXBUF          0xFFFF
 #define MAX_CONN 1024
-#define IDLE_TIMEOUT 300  // seconds (5 min)conn_entry_t conn_table[MAX_CONN];
+#define IDLE_TIMEOUT 300  // seconds (5 min)
 
 extern volatile int g_Running;
 
@@ -33,8 +33,13 @@ typedef struct {
 } conn_entry_t;
 
 
-conn_entry_t conn_table[MAX_CONN];
-int conn_count = 0;
+typedef struct {
+    conn_entry_t table[MAX_CONN];
+    int count;
+} conn_entries_t;
+
+conn_entries_t conn_tcp_entries = { .count = 0 };
+conn_entries_t conn_udp_entries = { .count = 0 };
 
 HANDLE handle;
 
@@ -59,49 +64,50 @@ static UINT32 ip_str_to_u32(const char *ip_str) {
     return ip; // already in network byte order
 }
 
+UINT32 handle_conn_entry(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
+    UINT16 *src_port, UINT16 *dst_port, UINT8 *packet, UINT packet_len, conn_entries_t *entries, BOOL tcp_rst, BOOL tcp_fin);
+
 // ---------------- Utility ----------------
 
 
-static void conn_remove_at(int idx)
+static void conn_remove_at(conn_entries_t *entries, int idx)
 {
-    if (idx < conn_count - 1) {
-        memmove(&conn_table[idx], &conn_table[idx + 1],
-                (conn_count - idx - 1) * sizeof(conn_entry_t));
+    if (idx < entries->count - 1) {
+        memmove(&entries->table[idx], &entries->table[idx + 1],
+                (entries->count - idx - 1) * sizeof(conn_entry_t));
     }
-    conn_count--;
+    entries->count--;
 }
 
-
-void remove_connection(conn_entry_t *entry)
+void remove_connection(conn_entries_t *entries, conn_entry_t *entry)
 {
-    int idx = (int)((conn_entry_t*)entry - conn_table);
-    if (idx >= 0 && idx < conn_count) {
-        conn_remove_at(idx);
+    int idx = (int)(entry - entries->table);
+    if (idx >= 0 && idx < entries->count) {
+        conn_remove_at(entries, idx);
     }
 }
 
 void update_connection_seen(conn_entry_t *entry)
 {
     if (entry) {
-        ((conn_entry_t*)entry)->last_seen = time(NULL);
+        entry->last_seen = time(NULL);
     }
 }
 
-void cleanup_connections()
+void cleanup_connections(conn_entries_t *entries)
 {
     time_t now = time(NULL);
-    for (int i = 0; i < conn_count; ) {
-        if (now - conn_table[i].last_seen > IDLE_TIMEOUT) {
+    for (int i = 0; i < entries->count; ) {
+        if (now - entries->table[i].last_seen > IDLE_TIMEOUT) {
             VPRINT(1, "[CONN] Removing idle connection src=%u:%u -> dst=%u:%u\n",
-                    conn_table[i].orig_src_ip, conn_table[i].orig_src_port,
-                    conn_table[i].orig_dst_ip, conn_table[i].orig_dst_port);
-            conn_remove_at(i);
+                   entries->table[i].orig_src_ip, entries->table[i].orig_src_port,
+                   entries->table[i].orig_dst_ip, entries->table[i].orig_dst_port);
+            conn_remove_at(entries, i);
         } else {
             i++;
         }
     }
 }
-
 
 
 UINT32 install_filter(){
@@ -192,33 +198,31 @@ UINT32 intercept_packets_loop() {
     return 0;
 }
 
-// Find connection in table by original 4-tuple
-int find_conn_outbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
-    for (int i = 0; i < conn_count; i++) {
-        if (conn_table[i].orig_src_ip == src_ip &&
-            conn_table[i].orig_src_port == src_port &&
-            conn_table[i].orig_dst_ip == dst_ip &&
-            conn_table[i].orig_dst_port == dst_port) {
+int find_conn_outbound(conn_entries_t *entries, UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
+    for (int i = 0; i < entries->count; i++) {
+        if (entries->table[i].orig_src_ip == src_ip &&
+            entries->table[i].orig_src_port == src_port &&
+            entries->table[i].orig_dst_ip == dst_ip &&
+            entries->table[i].orig_dst_port == dst_port) {
             return i;
         }
     }
     return -1;
 }
 
-// Find connection by proxy side 4-tuple
-int find_conn_inbound(UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
-    for (int i = 0; i < conn_count; i++) {
-        if (conn_table[i].proxy_dst_ip == src_ip &&
-            conn_table[i].proxy_dst_port == src_port &&
-            conn_table[i].orig_src_ip == dst_ip &&
-            conn_table[i].proxy_src_port == dst_port) {
+int find_conn_inbound(conn_entries_t *entries, UINT32 src_ip, UINT16 src_port, UINT32 dst_ip, UINT16 dst_port) {
+    for (int i = 0; i < entries->count; i++) {
+        if (entries->table[i].proxy_dst_ip == src_ip &&
+            entries->table[i].proxy_dst_port == src_port &&
+            entries->table[i].orig_src_ip == dst_ip &&
+            entries->table[i].proxy_src_port == dst_port) {
             return i;
         }
     }
     return -1;
 }
 
-UINT16 get_unused_src_port() {
+UINT16 get_unused_src_port(conn_entries_t *entries) {
     UINT16 port;
     int tries = 0;
     const int max_tries = 1000;
@@ -226,8 +230,8 @@ UINT16 get_unused_src_port() {
     do {
         port = (UINT16)(1024 + (rand() % (65535 - 1024)));
         int conflict = 0;
-        for (int i = 0; i < conn_count; i++) {
-            if (conn_table[i].proxy_src_port == htons(port)) {
+        for (int i = 0; i < entries->count; i++) {
+            if (entries->table[i].proxy_src_port == htons(port)) {
                 conflict = 1;
                 break;
             }
@@ -241,6 +245,7 @@ UINT16 get_unused_src_port() {
     VPRINT(1, "[WARN] Could not find unused source port after %d tries, returning random\n", max_tries);
     return port; // fallback
 }
+
 
 
 UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header,
@@ -259,10 +264,17 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 
         VPRINT(3, "Received DNS response <-- \n");
         dns_handle_packet(ip_header, udp_header, payload, payload_len);
+    } else {
+        VPRINT(3, "[UDP] Intercepted datagram...\n");
+
+        handle_conn_entry(addr, ip_header, &udp_header->SrcPort, &udp_header->DstPort,
+                  packet, packet_len, &conn_udp_entries, FALSE, FALSE);
+   //Redirect quic protocol
+        return 0;           //Return as the packet mangling and forward is done inside the handle_conn_entry function
     }
 
 
-    //Just, forward the datagram for the moment...
+    //Just, forward the datagram if DNS.
     //WinDivertHelperCalcChecksums(packet, packet_len, addr, 0);
     
     if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
@@ -274,48 +286,43 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 
 }
 
-
-UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
-    const PWINDIVERT_TCPHDR tcp_header, UINT8 *packet, UINT packet_len) {
-
+UINT32 handle_conn_entry(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
+    UINT16 *src_port, UINT16 *dst_port, UINT8 *packet, UINT packet_len, conn_entries_t *entries, BOOL tcp_rst, BOOL tcp_fin) 
+{
     int idx = -1;
 
     if (addr->Outbound) {
         VPRINT(3, "Outbound packet intercepted");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
         VPRINT(3, "\n");
 
-        
-
-        idx = find_conn_outbound(ip_header->SrcAddr, tcp_header->SrcPort,
-                                        ip_header->DstAddr, tcp_header->DstPort);
+        idx = find_conn_outbound(entries, ip_header->SrcAddr, *src_port,
+                                 ip_header->DstAddr, *dst_port);
         conn_entry_t *entry;
 
         if (idx >= 0) {
-            entry = &conn_table[idx];
-            VPRINT(2, "Found existing connection entry");
+            entry = &entries->table[idx];
+            VPRINT(2, "Found existing connection entry\n");
         } else {
-            if (conn_count >= MAX_CONN) {
+            if (entries->count >= MAX_CONN) {
                 VPRINT(1, "connection table full\n");
                 return -1;
             }
 
-            UINT16 new_src_port = get_unused_src_port();
+            UINT16 new_src_port = get_unused_src_port(entries);
 
-            idx = conn_count;
-
-            entry = &conn_table[conn_count++];
+            idx = entries->count;
+            entry = &entries->table[entries->count++];
             entry->orig_src_ip = ip_header->SrcAddr;
-            entry->orig_src_port = tcp_header->SrcPort;
+            entry->orig_src_port = *src_port;
             entry->orig_dst_ip = ip_header->DstAddr;
-            entry->orig_dst_port = tcp_header->DstPort;
+            entry->orig_dst_port = *dst_port;
 
-            UINT32 proxy_ip = ip_str_to_u32(PROXY_IP);
-
-            entry->proxy_dst_ip = proxy_ip;
+            entry->proxy_dst_ip = ip_str_to_u32(PROXY_IP);
             entry->proxy_dst_port = htons(PROXY_PORT);
             entry->proxy_src_port = htons(new_src_port);
+            entry->last_seen = time(NULL);
 
             VPRINT(2, "Tracking new connection:");
             VPRINT(2, "    Original: "); print_ip_port(entry->orig_src_ip, entry->orig_src_port);
@@ -325,12 +332,12 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
         }
 
         ip_header->DstAddr = entry->proxy_dst_ip;
-        tcp_header->DstPort = entry->proxy_dst_port;
-        tcp_header->SrcPort = entry->proxy_src_port;
+        *dst_port = entry->proxy_dst_port;
+        *src_port = entry->proxy_src_port;
 
         VPRINT(3, "Rewriting outbound packet to:\n");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
         VPRINT(3, "\n");
 
         WinDivertHelperCalcChecksums(packet, packet_len, addr, 0);
@@ -341,30 +348,29 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
 
     } else {
         VPRINT(3, "Inbound packet intercepted");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
         VPRINT(3, "\n");
 
-        idx = find_conn_inbound(ip_header->SrcAddr, tcp_header->SrcPort,
-                                    ip_header->DstAddr, tcp_header->DstPort);
+        idx = find_conn_inbound(entries, ip_header->SrcAddr, *src_port,
+                                ip_header->DstAddr, *dst_port);
         if (idx < 0) {
-            VPRINT(2, "No matching connection found, forwarding unchanged");
+            VPRINT(2, "No matching connection found, forwarding unchanged\n");
             if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
                 VPRINT(1, "failed to send inbound packet\n");
             }
             return -1;
         }
 
-        conn_entry_t *entry = &conn_table[idx];
-
+        conn_entry_t *entry = &entries->table[idx];
         ip_header->SrcAddr = entry->orig_dst_ip;
-        tcp_header->SrcPort = entry->orig_dst_port;
+        *src_port = entry->orig_dst_port;
         ip_header->DstAddr = entry->orig_src_ip;
-        tcp_header->DstPort = entry->orig_src_port;
+        *dst_port = entry->orig_src_port;
 
         VPRINT(3, "Rewriting inbound packet to:\n");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
         VPRINT(3, "\n");
 
         WinDivertHelperCalcChecksums(packet, packet_len, addr, 0);
@@ -374,33 +380,35 @@ UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
         }
     }
 
-    //Purge closed or timeout connections  
-    conn_entry_t *entry = &conn_table[idx];
+    conn_entry_t *entry = &entries->table[idx];
 
-    if (tcp_header->Rst) {
-        remove_connection(entry);
+    if (tcp_rst) {
+        remove_connection(entries, entry);
         VPRINT(3, "[CONN] Removed (RST)\n");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
         VPRINT(3, "\n");
-        
-                
-        
-    } else if (tcp_header->Fin) {
-        remove_connection(entry);
-        VPRINT(3, "[CONN] Removed (FIN)\n");
-        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, tcp_header->SrcPort);
-        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, tcp_header->DstPort);
-        VPRINT(3, "\n");
-        
-        
-    } else {
 
+    } else if (tcp_fin) {
+        remove_connection(entries, entry);
+        VPRINT(3, "[CONN] Removed (FIN)\n");
+        VPRINT(3, "    Src: "); print_ip_port(ip_header->SrcAddr, *src_port);
+        VPRINT(3, "  ->  Dst: "); print_ip_port(ip_header->DstAddr, *dst_port);
+        VPRINT(3, "\n");
+
+    } else {
         update_connection_seen(entry);
     }
 
-    cleanup_connections();
-    
+    cleanup_connections(entries);
     return 0;
+}
 
+
+UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
+    const PWINDIVERT_TCPHDR tcp_header, UINT8 *packet, UINT packet_len) 
+{
+    return handle_conn_entry(addr, ip_header,
+        &tcp_header->SrcPort, &tcp_header->DstPort, packet, packet_len,
+        &conn_tcp_entries, tcp_header->Rst, tcp_header->Fin);
 }

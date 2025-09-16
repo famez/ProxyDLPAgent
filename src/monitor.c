@@ -38,21 +38,26 @@ static void rebuild_filter(char *filter, size_t filter_len) {
         char ipbuf[64];
         ip_to_str(monitored_ips[i], ipbuf, sizeof(ipbuf));
 
-        char clause[256];
+        char clause[2048];
         snprintf(clause, sizeof(clause),
             " or (outbound and tcp.DstPort == %d and ip.DstAddr == %s)"
-            " or (outbound and tcp.DstPort == %d and ip.DstAddr == %s)",
+            " or (outbound and tcp.DstPort == %d and ip.DstAddr == %s)"
+            " or (outbound and udp.DstPort == %d and ip.DstAddr == %s)",        //For the quic protocol...
             HTTP_PORT, ipbuf,
+            HTTPS_PORT, ipbuf,
             HTTPS_PORT, ipbuf);
 
         strncat(filter, clause, filter_len - strlen(filter) - 1);
     }
 
     // Finally, add inbound packets coming from the proxy itself
-    char proxy_clause[256];
+    char proxy_clause[2048];
     snprintf(proxy_clause, sizeof(proxy_clause),
-        " or (inbound and tcp.SrcPort == %d and ip.SrcAddr == %s)",
-        PROXY_PORT, PROXY_IP);
+        " or (inbound and tcp.SrcPort == %d and ip.SrcAddr == %s)"
+        " or (inbound and udp.SrcPort == %d and ip.SrcAddr == %s)",             //For quic protocol...
+        PROXY_PORT, PROXY_IP,
+        PROXY_PORT, PROXY_IP
+    );
 
     strncat(filter, proxy_clause, filter_len - strlen(filter) - 1);
 }
@@ -80,7 +85,7 @@ void add_addrs_for_monitoring(const uint32_t *ips, int count) {
     }
 
     // Rebuild filter
-    char filter[2048];
+    char filter[8192];
     rebuild_filter(filter, sizeof(filter));
 
     VPRINT(1, "[MONITOR] Installing new filter: %s\n", filter);
