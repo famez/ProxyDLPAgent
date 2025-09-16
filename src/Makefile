@@ -1,6 +1,6 @@
 CC      = x86_64-w64-mingw32-gcc
 CFLAGS  = -Wall -O2 -I../include/
-#CFLAGS  = -Wall -O2 -g -I../include/
+#CFLAGS  = -Wall -O0 -g -I../include/
 LDFLAGS = -L../libs/ -lWinDivert -lws2_32 -lcurl -liphlpapi -lnetapi32 -pthread
 
 OBJDIR  = build
