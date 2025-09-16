@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 
-#define PROXY_IP        "192.168.0.15"
 #define PROXY_PORT      8080
 #define HTTP_PORT       80
 #define HTTPS_PORT      443

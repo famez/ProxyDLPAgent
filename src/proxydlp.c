@@ -310,6 +310,9 @@ UINT32 handle_conn_entry(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
                 return -1;
             }
 
+            //Get IP address from hostname
+            char *proxy_ip = get_proxy_ip();
+
             UINT16 new_src_port = get_unused_src_port(entries);
 
             idx = entries->count;
@@ -319,7 +322,7 @@ UINT32 handle_conn_entry(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             entry->orig_dst_ip = ip_header->DstAddr;
             entry->orig_dst_port = *dst_port;
 
-            entry->proxy_dst_ip = ip_str_to_u32(PROXY_IP);
+            entry->proxy_dst_ip = ip_str_to_u32(proxy_ip);
             entry->proxy_dst_port = htons(PROXY_PORT);
             entry->proxy_src_port = htons(new_src_port);
             entry->last_seen = time(NULL);

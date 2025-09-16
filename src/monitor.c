@@ -4,9 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "windivert.h"
 #include "tracelog.h"
 #include "monitor.h"
+#include "config.h"
 
 #define MAX_MONITORED_IPS 256
 #define HTTP_PORT   80
@@ -50,13 +52,16 @@ static void rebuild_filter(char *filter, size_t filter_len) {
         strncat(filter, clause, filter_len - strlen(filter) - 1);
     }
 
+    //Get proxy IP
+    char *proxy_ip = get_proxy_ip();
+
     // Finally, add inbound packets coming from the proxy itself
     char proxy_clause[2048];
     snprintf(proxy_clause, sizeof(proxy_clause),
         " or (inbound and tcp.SrcPort == %d and ip.SrcAddr == %s)"
         " or (inbound and udp.SrcPort == %d and ip.SrcAddr == %s)",             //For quic protocol...
-        PROXY_PORT, PROXY_IP,
-        PROXY_PORT, PROXY_IP
+        PROXY_PORT, proxy_ip,
+        PROXY_PORT, proxy_ip
     );
 
     strncat(filter, proxy_clause, filter_len - strlen(filter) - 1);

@@ -119,7 +119,39 @@ void WINAPI ServiceCtrlHandler(DWORD ctrlCode) {
     }
 }
 
+// Function to resolve hostname to IP address (IPv4)
+int resolve_hostname(const char *hostname, char *ip_str, size_t ip_str_len) {
+    WSADATA wsaData;
+    struct addrinfo hints, *res = NULL;
+
+    if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+        return -1; // Failed to initialize Winsock
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;       // IPv4
+    hints.ai_socktype = SOCK_STREAM; // TCP
+
+    if (getaddrinfo(hostname, NULL, &hints, &res) != 0) {
+        WSACleanup();
+        return -2; // DNS lookup failed
+    }
+
+    struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+    if (inet_ntop(AF_INET, &(addr->sin_addr), ip_str, ip_str_len) == NULL) {
+        freeaddrinfo(res);
+        WSACleanup();
+        return -3; // Failed to convert IP to string
+    }
+
+    freeaddrinfo(res);
+    WSACleanup();
+    return 0; // Success
+}
+
 void RunProxyDLP() {
+
+    char proxy_ip[INET_ADDRSTRLEN];
 
     //Remove old logs
     remove(LOG_FILE_PATH);
@@ -133,6 +165,17 @@ void RunProxyDLP() {
         // If no values in registry, register the agent
         register_agent();
     }
+
+    const char *hostname = get_proxy_hostname();
+
+    //Get IP address of the proxy from the hostname or domain name
+    if (resolve_hostname(hostname, proxy_ip, sizeof(proxy_ip)) == 0) {
+        VPRINT(1, "IP Address: %s\n", proxy_ip);
+    } else {
+        VPRINT(1, "Failed to resolve hostname.\n");
+    }
+
+    set_proxy_ip(proxy_ip);
 
     get_urls_to_monitor();
 

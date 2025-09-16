@@ -17,6 +17,9 @@ const char* get_proxy_hostname();
 void set_guid(const char *new_guid);
 void set_token(const char *new_token);
 
+void set_proxy_ip(const char *ip);
+const char* get_proxy_ip();
+
 
 
 #endif

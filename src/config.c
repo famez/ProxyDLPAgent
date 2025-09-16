@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <ws2tcpip.h>
 
 #include "config.h"
 #include "tracelog.h"
@@ -7,6 +8,7 @@
 static char guid[256] = {0};
 static char token[256] = {0}; 
 static char proxy_hostname[256] = {0}; 
+static char proxy_ip[INET_ADDRSTRLEN] = {0}; 
 
 BOOL read_string_from_registry(const char *value_name, char *buffer, DWORD buffer_size) {
     HKEY hKey;
@@ -93,4 +95,15 @@ const char* get_token() { return token; }
 
 const char* get_proxy_hostname() {
     return proxy_hostname;
+}
+
+void set_proxy_ip(const char *ip) {
+    if (ip) {
+        strncpy(proxy_ip, ip, sizeof(proxy_ip) - 1);
+        proxy_ip[sizeof(proxy_ip) - 1] = '\0'; // ensure null termination
+    }
+}
+
+const char* get_proxy_ip() {
+    return proxy_ip;
 }
