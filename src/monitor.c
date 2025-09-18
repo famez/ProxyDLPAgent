@@ -209,17 +209,33 @@ void add_addrs_for_monitoring(const uint32_t *ips, int count) {
                    b[0], b[1], b[2], b[3]);
         }
 
-        DWORD if_index;
-        UINT32 gateway;
+        DWORD proxy_if_index, ip_if_index;
+        UINT32 proxy_gateway, ip_gateway;
 
-        //Add the same route for dest as for the proxy
-        if(get_route_for_dest(proxy_addr.S_un.S_addr, &if_index, &gateway)) {
-            if (add_route(ip, 0xFFFFFFFF, gateway, if_index)) {
+        // Get route for proxy
+        if (!get_route_for_dest(proxy_addr.S_un.S_addr, &proxy_if_index, &proxy_gateway)) {
+            VPRINT(1, "[ERROR] Could not get route for proxy\n");
+            return;
+        }
+
+        // Get route for target IP
+        if (!get_route_for_dest(ip, &ip_if_index, &ip_gateway)) {
+            VPRINT(1, "[ERROR] Could not get route for target IP\n");
+            return;
+        }
+
+        // Compare routes
+        if (proxy_if_index != ip_if_index || proxy_gateway != ip_gateway) {
+            // Only add route if route differs
+            if (add_route(ip, 0xFFFFFFFF, ip_gateway, ip_if_index)) {
                 VPRINT(1, "[ROUTE] Route added successfully\n");
             } else {
                 VPRINT(1, "[ERROR] Failed to add route\n");
             }
+        } else {
+            VPRINT(1, "[INFO] Route to target IP is same as proxy, no need to add\n");
         }
+
 
     }
 
