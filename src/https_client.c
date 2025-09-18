@@ -120,11 +120,34 @@ void get_logged_in_users(char *buffer, size_t size) {
                                               NULL);
     if ((nStatus == NERR_Success || nStatus == ERROR_MORE_DATA) && pBuf != NULL) {
         pTmpBuf = pBuf;
+        char *usernames[UNLEN + 1] = {0}; // simple array for deduplication
+        int user_count = 0;
+
         for (i = 0; i < dwEntriesRead; i++) {
             if (pTmpBuf != NULL && pTmpBuf->wkui1_username != NULL) {
-                if (strlen(buffer) + wcslen(pTmpBuf->wkui1_username) + 2 < size) {
-                    char username[UNLEN+1];
-                    wcstombs(username, pTmpBuf->wkui1_username, sizeof(username));
+                // Convert from wide char to multibyte
+                char username[UNLEN + 1] = {0};
+                wcstombs(username, pTmpBuf->wkui1_username, sizeof(username) - 1);
+
+                // Skip if ends with '$'
+                size_t ulen = strlen(username);
+                if (ulen > 0 && username[ulen - 1] == '$') {
+                    pTmpBuf++;
+                    continue;
+                }
+
+                // Check for duplicates
+                int duplicate = 0;
+                for (int j = 0; j < user_count; j++) {
+                    if (strcmp(usernames[j], username) == 0) {
+                        duplicate = 1;
+                        break;
+                    }
+                }
+                if (!duplicate && (strlen(buffer) + ulen + 2 < size)) {
+                    // Add to deduplication array
+                    usernames[user_count] = strdup(username);
+                    user_count++;
                     strcat_s(buffer, size, username);
                     strcat_s(buffer, size, ", ");
                 }
@@ -132,6 +155,11 @@ void get_logged_in_users(char *buffer, size_t size) {
             pTmpBuf++;
         }
         NetApiBufferFree(pBuf);
+
+        // Free allocated usernames
+        for (int j = 0; j < user_count; j++) {
+            free(usernames[j]);
+        }
 
         size_t len = strlen(buffer);
         if (len > 2) buffer[len - 2] = '\0'; // trim trailing comma+space
@@ -146,14 +174,24 @@ void get_ip_addresses(char *buffer, size_t size) {
     DWORD dwSize = 0;
     GetAdaptersInfo(NULL, &dwSize);  // Get required buffer size
     IP_ADAPTER_INFO *pAdapterInfo = (IP_ADAPTER_INFO*) malloc(dwSize);
-    
+
     if (GetAdaptersInfo(pAdapterInfo, &dwSize) == NO_ERROR) {
         IP_ADAPTER_INFO *pAdapter = pAdapterInfo;
         buffer[0] = '\0';
+        int first = 1;
         while (pAdapter) {
-            strcat_s(buffer, size, pAdapter->IpAddressList.IpAddress.String);
-            if (pAdapter->Next) strcat_s(buffer, size, ", ");
+            const char *ip = pAdapter->IpAddressList.IpAddress.String;
+            if (strcmp(ip, "0.0.0.0") != 0 && strlen(ip) > 0) {
+                if (!first) {
+                    strcat_s(buffer, size, ", ");
+                }
+                strcat_s(buffer, size, ip);
+                first = 0;
+            }
             pAdapter = pAdapter->Next;
+        }
+        if (first) {
+            snprintf(buffer, size, "Unknown IP");
         }
     } else {
         snprintf(buffer, size, "Unknown IP");
