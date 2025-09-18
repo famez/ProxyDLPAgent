@@ -24,18 +24,43 @@ static UINT32 monitored_ips[MAX_MONITORED_IPS];
 static int num_monitored_ips = 0;
 
 // Get the interface index and gateway used to reach dest_ip (network byte order)
+#include <stdio.h>
+#include <ws2tcpip.h>
+#include <netioapi.h>
+
 BOOL get_route_for_dest(UINT32 dest_ip, DWORD *out_if_index, UINT32 *out_gateway)
 {
-    if (!out_if_index || !out_gateway)
+    if (!out_if_index || !out_gateway) {
+        VPRINT(3, "[DEBUG] Invalid output pointers\n");
         return FALSE;
+    }
 
+    // Print input IP in human-readable form
+    char ip_str[INET_ADDRSTRLEN];
+    struct in_addr tmp;
+    tmp.S_un.S_addr = dest_ip;
+    if (inet_ntop(AF_INET, &tmp, ip_str, sizeof(ip_str))) {
+        VPRINT(1, "[V1] Looking up route for IP: %s (raw=0x%08X)\n", ip_str, dest_ip);
+    } else {
+        VPRINT(1, "[V1] inet_ntop failed for dest_ip=0x%08X\n", dest_ip);
+    }
+
+    // Initialize row properly (instead of memset)
     MIB_IPFORWARD_ROW2 row;
-    memset(&row, 0, sizeof(row));
+    InitializeIpForwardEntry(&row);
 
     SOCKADDR_INET dest;
     memset(&dest, 0, sizeof(dest));
+
+    SOCKADDR_INET best_source; // <-- Allocate one
+    memset(&best_source, 0, sizeof(best_source));
+
     dest.Ipv4.sin_family = AF_INET;
     dest.Ipv4.sin_addr.S_un.S_addr = dest_ip;
+
+    VPRINT(1, "[DEBUG] SOCKADDR_INET: family=%d, addr=0x%08lX\n",
+       dest.Ipv4.sin_family, dest.Ipv4.sin_addr.S_un.S_addr);
+
 
     NETIO_STATUS status = GetBestRoute2(
         NULL,    // InterfaceLuid
@@ -44,23 +69,44 @@ BOOL get_route_for_dest(UINT32 dest_ip, DWORD *out_if_index, UINT32 *out_gateway
         &dest,   // DestinationAddress
         0,       // AddressSortOptions
         &row,    // BestRoute
-        NULL     // BestSourceAddress
+        &best_source     // BestSourceAddress
     );
 
     if (status != NO_ERROR) {
-        printf("GetBestRoute2 failed: %lu\n", status);
+        VPRINT(1, "[V1] GetBestRoute2 failed: %lu (ERROR_%lu)\n", status, status);
         return FALSE;
     }
 
     *out_if_index = row.InterfaceIndex;
-    if (row.NextHop.si_family == AF_INET) {
-        *out_gateway = row.NextHop.Ipv4.sin_addr.S_un.S_addr;
+
+    *out_gateway = (row.NextHop.si_family == AF_INET)
+                     ? row.NextHop.Ipv4.sin_addr.S_un.S_addr
+                     : 0;
+
+    // Convert gateway and source to strings
+    char gw_str[INET_ADDRSTRLEN];
+    char src_str[INET_ADDRSTRLEN];
+
+    if (best_source.si_family == AF_INET &&
+        inet_ntop(AF_INET, &best_source.Ipv4.sin_addr, src_str, sizeof(src_str))) {
+        // src_str filled
     } else {
-        *out_gateway = 0; // direct route
+        strcpy(src_str, "N/A");
     }
+
+    if (row.NextHop.si_family == AF_INET &&
+        inet_ntop(AF_INET, &row.NextHop.Ipv4.sin_addr, gw_str, sizeof(gw_str))) {
+        VPRINT(1, "[V1] Route found: if_index=%lu, gateway=%s (0x%08lX), source=%s\n",
+               row.InterfaceIndex, gw_str, (unsigned long)*out_gateway, src_str);
+    } else {
+        VPRINT(1, "[V1] Route found: if_index=%lu, direct route (no gateway), source=%s\n",
+               row.InterfaceIndex, src_str);
+    }
+
 
     return TRUE;
 }
+
 
 // Add a host route via specified interface and gateway
 BOOL add_route(UINT32 dest_ip, UINT32 netmask, UINT32 gateway, DWORD if_index)
