@@ -227,7 +227,7 @@ void add_addrs_for_monitoring(const uint32_t *ips, int count) {
         // Compare routes
         if (proxy_if_index != ip_if_index || proxy_gateway != ip_gateway) {
             // Only add route if route differs
-            if (add_route(ip, 0xFFFFFFFF, ip_gateway, ip_if_index)) {
+            if (add_route(ip, 0xFFFFFFFF, proxy_gateway, proxy_if_index)) {
                 VPRINT(1, "[ROUTE] Route added successfully\n");
             } else {
                 VPRINT(1, "[ERROR] Failed to add route\n");
