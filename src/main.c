@@ -29,6 +29,7 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv);
 void WINAPI ServiceCtrlHandler(DWORD ctrlCode);
 void RunProxyDLP();
 void DeregisterAgent();
+void wait_for_proxy_ready();
 
 void* ProxyDLPThread(void* arg) {
     RunProxyDLP();
@@ -161,7 +162,13 @@ void RunProxyDLP() {
     init_telemetry();
     init_https();
 
-    if (!load_values_from_registry()) {
+    BOOL loaded = load_values_from_registry();
+
+    //Wait for proxy to be ready...
+    wait_for_proxy_ready();
+
+
+    if (!loaded) {
         // If no values in registry, register the agent
         register_agent();
     }
@@ -188,6 +195,14 @@ void RunProxyDLP() {
 
     end_https();
     finish_heartbeat_worker();
+}
+
+void wait_for_proxy_ready() {
+
+    while(check_proxy_healthy()) {
+        Sleep(2 * 1000);        //Retry every 2 seconds
+    }
+
 }
 
 

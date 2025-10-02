@@ -594,3 +594,48 @@ cleanup:
     free(response.data);
     return ret;
 }
+
+int check_proxy_healthy() {
+    CURL *curl;
+    CURLcode res;
+    long http_code = 0;
+    int ret = -1;
+
+    // Build deregister URL
+    char url[1024];
+    const char *hostname = get_proxy_hostname();
+    snprintf(url, sizeof(url), "https://%s/api/agent/" HEALTHCHECK_ENDPOINT, hostname);
+
+    curl = curl_easy_init();
+    if (!curl) {
+        VPRINT(1, "[ERROR] Failed to initialize CURL\n");
+        return -2;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
+
+    // SSL options
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, PROXYDLP_CA_FILE);
+
+    res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        VPRINT(3, "[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        ret = -3;
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code == 200) {
+            VPRINT(1, "[INFO] Healthcheck successful.\n");
+            ret = 0;
+        } else {
+            VPRINT(3, "[ERROR] Healthcheck failed with HTTP code %ld\n", http_code);
+            ret = -4;
+        }
+    }
+
+    curl_easy_cleanup(curl);
+
+    return ret;
+}
