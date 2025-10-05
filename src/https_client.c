@@ -281,7 +281,7 @@ int send_heartbeat() {
 
     const char *hostname = get_proxy_hostname();
     char base_url[256];
-    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" HEARTBEAT_ENDPOINT, hostname);
+    snprintf(base_url, sizeof(base_url), "https://%s:4443/" HEARTBEAT_ENDPOINT, hostname);
 
     curl_easy_setopt(curl, CURLOPT_URL, base_url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_generic_log);
@@ -343,7 +343,7 @@ int register_agent() {
 
     const char *hostname = get_proxy_hostname();
     char base_url[256];
-    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" REGISTER_ENDPOINT, hostname);
+    snprintf(base_url, sizeof(base_url), "https://%s:4443/" REGISTER_ENDPOINT, hostname);
 
     curl_easy_setopt(curl, CURLOPT_URL, base_url);
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
@@ -433,7 +433,7 @@ int deregister_agent() {
     char url[1024];
     const char *hostname = get_proxy_hostname();
     char base_url[256];
-    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" DEREGISTER_ENDPOINT, hostname);
+    snprintf(base_url, sizeof(base_url), "https://%s:4443/" DEREGISTER_ENDPOINT, hostname);
     snprintf(url, sizeof(url), "%s?guid=%s", base_url, guid);
 
     VPRINT(1, "[DEBUG] Deregister URL: %s\n", url);
@@ -496,7 +496,7 @@ int get_urls_to_monitor() {
 
     const char *hostname = get_proxy_hostname();
     char base_url[256];
-    snprintf(base_url, sizeof(base_url), "https://%s/api/agent/" MON_URLS_ENDPOINT, hostname);
+    snprintf(base_url, sizeof(base_url), "https://%s:4443/" MON_URLS_ENDPOINT, hostname);
     snprintf(url, sizeof(url), "%s?guid=%s", base_url, guid);
     VPRINT(1, "[DEBUG] Request URL: %s\n", url);
 
@@ -604,7 +604,7 @@ int check_proxy_healthy() {
     // Build deregister URL
     char url[1024];
     const char *hostname = get_proxy_hostname();
-    snprintf(url, sizeof(url), "https://%s/api/agent/" HEALTHCHECK_ENDPOINT, hostname);
+    snprintf(url, sizeof(url), "https://%s:4443/" HEALTHCHECK_ENDPOINT, hostname);
 
     curl = curl_easy_init();
     if (!curl) {

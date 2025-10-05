@@ -6,9 +6,9 @@
 
 #include "windivert.h"
 #include "tracelog.h"
-#include "monitor.h"
 #include "telemetry.h"
 #include "heartbeat.h"
+#include "config.h"
 
 #define MAX_DNS_NAME_LEN     255
 #define MAX_DNS_RECURSION    10
@@ -17,18 +17,8 @@
 #define MAX_DNS_NAMES        16   // max hostnames/aliases per entry
 #define MAX_DNS_ENTRIES      128
 
-typedef struct dns_entry {
-    char hostnames[MAX_DNS_NAMES][MAX_HOSTNAME_LEN + 1];
-    int num_hostnames;
 
-    uint32_t ipv4_addresses[MAX_IP_ADDRESSES];
-    int num_addresses;
-} dns_entry_t;
 
-typedef struct dns_table {
-    dns_entry_t entries[MAX_DNS_ENTRIES];
-    int num_entries;
-} dns_table_t;
 
 typedef struct dns_header {
     uint16_t id;
@@ -39,14 +29,7 @@ typedef struct dns_header {
     uint16_t arcount;
 } dns_header_t;
 
-static dns_table_t g_dns_table = { .num_entries = 0 };
 
-dns_entry_t* dns_table_find_by_hostname(dns_table_t *table, const char *hostname);
-dns_entry_t* dns_table_find_by_ip(dns_table_t *table, uint32_t ip);
-dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname);
-void dns_entry_add_hostname(dns_entry_t *entry, const char *hostname);
-void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip);
-void dns_table_add_cname(dns_table_t *table, const char *alias, const char *canonical);
 
 typedef struct dns_domains {
     char **domain_list;
@@ -55,24 +38,49 @@ typedef struct dns_domains {
 
 dns_domains_t dns_monitored_domains_table;
 
+// Returns TRUE if qname matches any monitored domain.
+// Matching rules:
+//  - exact match (case-insensitive) OR
+//  - qname is a subdomain of monitored domain (e.g. "a.b.example.com" matches "example.com")
+// qname may include a trailing '.' (we strip it).
+static BOOL dns_qname_matches_monitored(const char *qname)
+{
+    if (!qname) return FALSE;
 
-// Case-insensitive substring check
-static BOOL dns_entry_matches_monitored(const dns_entry_t *entry) {
-    for (int i = 0; i < entry->num_hostnames; i++) {
-        const char *hostname = entry->hostnames[i];
+    char qnorm[MAX_DNS_NAME_LEN + 1];
+    strncpy(qnorm, qname, MAX_DNS_NAME_LEN);
+    qnorm[MAX_DNS_NAME_LEN] = '\0';
 
-        for (int j = 0; j < dns_monitored_domains_table.num_domains; j++) {
-            const char *monitored = dns_monitored_domains_table.domain_list[j];
+    // strip trailing dot if present
+    size_t qlen = strlen(qnorm);
+    if (qlen > 0 && qnorm[qlen - 1] == '.') {
+        qnorm[qlen - 1] = '\0';
+        qlen--;
+    }
 
-            // Check if monitored string is a substring of the hostname
-            if (StrStrIA(hostname, monitored) != NULL) {  
-                return TRUE;  // match found
+    for (int i = 0; i < dns_monitored_domains_table.num_domains; i++) {
+        const char *mon = dns_monitored_domains_table.domain_list[i];
+        if (!mon) continue;
+        size_t mlen = strlen(mon);
+        if (mlen == 0) continue;
+
+        // exact match (case-insensitive)
+        if (_stricmp(qnorm, mon) == 0) {
+            return TRUE;
+        }
+
+        // qname ends with '.' + monitored (i.e. a subdomain)
+        // ensure qlen > mlen and the char before the suffix is '.'
+        if (qlen > mlen + 1) {
+            const char *suffix = qnorm + (qlen - mlen);
+            if (_stricmp(suffix, mon) == 0 && qnorm[qlen - mlen - 1] == '.') {
+                return TRUE;
             }
         }
     }
+
     return FALSE;
 }
-
 
 
 static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
@@ -113,184 +121,135 @@ static const uint8_t *read_name_safe(const uint8_t *ptr, const uint8_t *base,
     return ptr;
 }
 
-static const uint8_t *read_record_safe(const uint8_t *ptr, const uint8_t *base,
-                                       size_t payload_len, dns_table_t *table) {
-    char name[MAX_DNS_NAME_LEN + 1];
-    const uint8_t *new_ptr = read_name_safe(ptr, base, payload_len, name, 0);
-    if (!new_ptr) return NULL;
-    ptr = new_ptr;
+// Build a DNS response packet (IP+UDP+DNS) into outbuf.
+// Returns total packet length on success (>0), 0 on failure.
+//
+// This version does NOT swap IPs or ports.
+UINT build_dns_response_packet(
+    const PWINDIVERT_IPHDR ip_header,
+    const PWINDIVERT_UDPHDR udp_header,
+    const UINT8 *query_payload,
+    UINT query_len,
+    const char *queried_name,
+    uint32_t spoof_ip,         // in network order
+    UINT8 *outbuf,
+    UINT outbuf_len)
+{
+    if (!ip_header || !udp_header || !query_payload || !queried_name || !outbuf) return 0;
 
-    if (payload_len - (ptr - base) < 10) return NULL;
+    // DNS payload
+    uint8_t dns_payload[512];
+    memset(dns_payload, 0, sizeof(dns_payload));
+    struct dns_header *resp_hdr = (struct dns_header *)dns_payload;
+    const struct dns_header *query_hdr = (const struct dns_header *)query_payload;
 
-    uint16_t type = ntohs(*(uint16_t*)ptr); ptr += 2;
-    ptr += 2; // class
-    ptr += 4; // ttl
-    uint16_t rdlength = ntohs(*(uint16_t*)ptr); ptr += 2;
+    // Copy ID and set flags
+    resp_hdr->id = query_hdr->id;
+    resp_hdr->flags = htons(0x8180); // standard response, recursion available, no error
+    resp_hdr->qdcount = htons(1);
+    resp_hdr->ancount = htons(1);
+    resp_hdr->nscount = 0;
+    resp_hdr->arcount = 0;
 
-    if ((size_t)(ptr - base) + rdlength > payload_len) return NULL;
+    uint8_t *dptr = dns_payload + sizeof(struct dns_header);
 
-    if (type == 1 && rdlength == 4) { // A record
-        dns_entry_t *entry = dns_table_add_entry(table, name);
-        dns_entry_add_ip(entry, *(uint32_t*)ptr);
-    } else if (type == 5) { // CNAME
-        char cname[MAX_DNS_NAME_LEN + 1];
-        const uint8_t *end = read_name_safe(ptr, base, payload_len, cname, 0);
-        if (!end) return NULL;
-        dns_table_add_cname(table, name, cname);
+    // Write queried name
+    const char *pos = queried_name;
+    while (*pos) {
+        const char *dot = strchr(pos, '.');
+        size_t len = dot ? (size_t)(dot - pos) : strlen(pos);
+        if (len > 63) return 0; // invalid label
+        *dptr++ = (uint8_t)len;
+        if ((UINT)(dptr - dns_payload) + len >= sizeof(dns_payload)) return 0;
+        memcpy(dptr, pos, len);
+        dptr += len;
+        if (!dot) break;
+        pos = dot + 1;
     }
-    // TODO: AAAA support
+    *dptr++ = 0; // end of name
 
-    return ptr + rdlength;
+    // Question section
+    *(uint16_t *)dptr = htons(1); dptr += 2; // QTYPE = A
+    *(uint16_t *)dptr = htons(1); dptr += 2; // QCLASS = IN
+
+    // Answer section
+    *(uint16_t *)dptr = htons(0xC00C); dptr += 2; // NAME = pointer to query name (offset 12)
+    *(uint16_t *)dptr = htons(1); dptr += 2;      // TYPE = A
+    *(uint16_t *)dptr = htons(1); dptr += 2;      // CLASS = IN
+    *(uint32_t *)dptr = htonl(60); dptr += 4;     // TTL = 60
+    *(uint16_t *)dptr = htons(4); dptr += 2;      // RDLENGTH = 4
+    *(uint32_t *)dptr = spoof_ip; dptr += 4;      // RDATA = spoofed IP
+
+    UINT dns_len = (UINT)(dptr - dns_payload);
+
+    // Copy existing headers (no swapping)
+    WINDIVERT_IPHDR ip_out = *ip_header;
+    WINDIVERT_UDPHDR udp_out = *udp_header;
+
+    // Set lengths only
+    UINT ip_total_len = (UINT)(sizeof(WINDIVERT_IPHDR) + sizeof(WINDIVERT_UDPHDR) + dns_len);
+    ip_out.Length = htons((uint16_t)ip_total_len);
+    udp_out.Length = htons((uint16_t)(sizeof(WINDIVERT_UDPHDR) + dns_len));
+    udp_out.Checksum = 0; // to be recomputed later
+
+    if (outbuf_len < ip_total_len) return 0;
+
+    UINT offset = 0;
+    memcpy(outbuf + offset, &ip_out, sizeof(ip_out)); offset += sizeof(ip_out);
+    memcpy(outbuf + offset, &udp_out, sizeof(udp_out)); offset += sizeof(udp_out);
+    memcpy(outbuf + offset, dns_payload, dns_len); offset += dns_len;
+
+    return offset;
 }
 
-void dns_handle_packet(const PWINDIVERT_IPHDR ip_header, const PWINDIVERT_UDPHDR udp_header,
-                       const UINT8 *payload, const UINT payload_len) {
 
-    unsigned char *src_bytes = (unsigned char *)&ip_header->SrcAddr;
-    unsigned char *dst_bytes = (unsigned char *)&ip_header->DstAddr;
+UINT dns_handle_packet(
+    const PWINDIVERT_IPHDR ip_header,
+    const PWINDIVERT_UDPHDR udp_header,
+    const UINT8 *payload,
+    const UINT payload_len,
+    UINT8 *outbuf,
+    UINT outbuf_len)
+{
+    if (!ip_header || !udp_header || !payload || !outbuf) return 0;
 
-    VPRINT(3, "[DNS] Packet from %u.%u.%u.%u:%u to %u.%u.%u.%u:%u\n",
-        src_bytes[0], src_bytes[1], src_bytes[2], src_bytes[3], ntohs(udp_header->SrcPort),
-        dst_bytes[0], dst_bytes[1], dst_bytes[2], dst_bytes[3], ntohs(udp_header->DstPort));
-
-    if (payload_len < sizeof(struct dns_header)) return;
     const struct dns_header *hdr = (const struct dns_header *)payload;
-
-    VPRINT(3, "ID: %u\n", ntohs(hdr->id));
-    VPRINT(3, "Questions: %u\n", ntohs(hdr->qdcount));
-    VPRINT(3, "Answers: %u\n", ntohs(hdr->ancount));
+    if (payload_len < sizeof(struct dns_header)) return 0;
+    if (ntohs(hdr->qdcount) == 0) return 0;
 
     const uint8_t *ptr = payload + sizeof(struct dns_header);
+    char qname[MAX_DNS_NAME_LEN + 1];
+    const uint8_t *new_ptr = read_name_safe(ptr, payload, payload_len, qname, 0);
+    if (!new_ptr) return 0;
+    ptr = new_ptr;
 
-    // Questions
-    for (int i = 0; i < ntohs(hdr->qdcount); i++) {
-        char name[MAX_DNS_NAME_LEN + 1];
-        const uint8_t *new_ptr = read_name_safe(ptr, payload, payload_len, name, 0);
-        if (!new_ptr) return;
-        ptr = new_ptr;
+    if ((size_t)(ptr - payload) + 4 > payload_len) return 0;
+    uint16_t qtype = ntohs(*(uint16_t *)ptr); ptr += 2;
+    uint16_t qclass = ntohs(*(uint16_t *)ptr); ptr += 2;
 
-        if ((size_t)(ptr - payload) + 4 > payload_len) return;
-        uint16_t qtype = ntohs(*(uint16_t *)ptr); ptr += 2;
-        uint16_t qclass = ntohs(*(uint16_t *)ptr); ptr += 2;
-        VPRINT(3, "Query: %s, Type: %u, Class: %u\n", name, qtype, qclass);
-    }
+    VPRINT(2, "[DNS] Query: %s, Type=%u, Class=%u\n", qname, qtype, qclass);
 
-    // Answers
-    for (int i = 0; i < ntohs(hdr->ancount); i++) {
-        const uint8_t *new_ptr = read_record_safe(ptr, payload, payload_len, &g_dns_table);
+    if (qtype == 1 && qclass == 1 && dns_qname_matches_monitored(qname)) {
+        const char *proxy_ip_str = get_proxy_ip();
+        uint32_t spoof_ip = inet_addr(proxy_ip_str); // convert string to network order uint32_t
 
-        //Add the IPs for the monitored domains as IPs to be filtered by Windivert
-        dns_entry_t *last_entry = &g_dns_table.entries[g_dns_table.num_entries-1];
-        if (dns_entry_matches_monitored(last_entry)) {
-            add_addrs_for_monitoring(last_entry->ipv4_addresses,
-                                    last_entry->num_addresses);
-            update_telemetry_data_multiple(last_entry->hostnames[0], last_entry->ipv4_addresses, 
-                last_entry->num_addresses);
-                request_heartbeat();
-        } else {
-            VPRINT(2, "[DNS] Skipping domain (not in monitored list)\n");
+        VPRINT(1, "[DNS] Building spoofed response for %s\n", qname);
+
+        UINT pkt_len = build_dns_response_packet(ip_header, udp_header,
+                                                 payload, payload_len,
+                                                 qname, spoof_ip,
+                                                 outbuf, outbuf_len);
+        if (pkt_len == 0) {
+            VPRINT(1, "[ERR] Failed to build DNS response packet\n");
+            return 0;
         }
 
-        if (!new_ptr) return;
-        ptr = new_ptr;
+        return pkt_len;
     }
+
+    return 0;
 }
 
-
-// ----------------------------------------------------------------------
-// Lookup and modification functions
-// ----------------------------------------------------------------------
-
-// Find entry by hostname
-dns_entry_t* dns_table_find_by_hostname(dns_table_t *table, const char *hostname) {
-    for (int i = 0; i < table->num_entries; i++) {
-        for (int j = 0; j < table->entries[i].num_hostnames; j++) {
-            if (strcmp(table->entries[i].hostnames[j], hostname) == 0) {
-                return &table->entries[i];
-            }
-        }
-    }
-    return NULL;
-}
-
-// Find entry by IP
-dns_entry_t* dns_table_find_by_ip(dns_table_t *table, uint32_t ip) {
-    for (int i = 0; i < table->num_entries; i++) {
-        for (int j = 0; j < table->entries[i].num_addresses; j++) {
-            if (table->entries[i].ipv4_addresses[j] == ip) {
-                return &table->entries[i];
-            }
-        }
-    }
-    return NULL;
-}
-
-// Add a new entry (if doesn't exist yet)
-dns_entry_t* dns_table_add_entry(dns_table_t *table, const char *hostname) {
-    dns_entry_t *entry = dns_table_find_by_hostname(table, hostname);
-    if (entry) return entry;
-
-    if (table->num_entries >= MAX_DNS_ENTRIES) {
-        table->num_entries = 0;
-        VPRINT(1, "[WARN] DNS table full, overwriting old entries in circular buffer %s\n", hostname);
-        return NULL;
-    }
-
-    entry = &table->entries[table->num_entries++];
-    memset(entry, 0, sizeof(*entry));
-    strncpy(entry->hostnames[0], hostname, MAX_HOSTNAME_LEN);
-    entry->num_hostnames = 1;
-    entry->num_addresses = 0;
-    return entry;
-}
-
-// Add an alias hostname to an existing entry
-void dns_entry_add_hostname(dns_entry_t *entry, const char *hostname) {
-    if (!entry) return;
-
-    for (int i = 0; i < entry->num_hostnames; i++) {
-        if (strcmp(entry->hostnames[i], hostname) == 0) {
-            return; // already stored
-        }
-    }
-
-    if (entry->num_hostnames < MAX_DNS_NAMES) {
-        strncpy(entry->hostnames[entry->num_hostnames++], hostname, MAX_HOSTNAME_LEN);
-    } else {
-        VPRINT(1, "[WARN] Too many hostnames for entry, ignoring %s\n", hostname);
-    }
-}
-
-// Add an IPv4 address to an entry
-void dns_entry_add_ip(dns_entry_t *entry, uint32_t ip) {
-    if (!entry) return;
-
-    for (int i = 0; i < entry->num_addresses; i++) {
-        if (entry->ipv4_addresses[i] == ip) {
-            return; // avoid duplicates
-        }
-    }
-
-    if (entry->num_addresses < MAX_IP_ADDRESSES) {
-        entry->ipv4_addresses[entry->num_addresses++] = ip;
-
-        unsigned char *ip_bytes = (unsigned char *)&ip;
-        VPRINT(2, "[INFO] Added IP %u.%u.%u.%u to entry\n",
-            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
-    } else {
-        VPRINT(1, "[WARN] Too many IPs for entry, ignoring\n");
-    }
-}
-
-// Store a CNAME mapping (alias → canonical)
-void dns_table_add_cname(dns_table_t *table, const char *alias, const char *canonical) {
-    dns_entry_t *alias_entry = dns_table_add_entry(table, alias);
-    if (!alias_entry) return;
-
-    dns_entry_add_hostname(alias_entry, canonical);
-
-    VPRINT(2, "[INFO] CNAME: %s -> %s (stored in same entry)\n", alias, canonical);
-}
 
 void free_domains_list() {
     for (int i = 0; i < dns_monitored_domains_table.num_domains; i++) {
