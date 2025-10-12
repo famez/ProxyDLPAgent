@@ -36,21 +36,10 @@ UINT32 install_filter(){
     char filter[256];
     int r;
 
-    srand((unsigned int)time(NULL));
-
-    //Get proxy IP
-    const char *proxy_ip = get_proxy_ip();
-
-    //We listen to outbound HTTP and HTTPS requests and also to incoming requests from the src proxy IP and port.
-
 
     r = snprintf(filter, sizeof(filter),
-        "(inbound and udp.SrcPort == %d)"
-        " or (outbound and (tcp.DstPort == %d or udp.DstPort == %d) and ip.DstAddr == %s)"
-        " or (inbound and tcp.SrcPort == %d and ip.SrcAddr == %s)",
-        DNS_PORT, 
-        HTTPS_PORT, HTTPS_PORT, proxy_ip,
-        PROXY_PORT, proxy_ip);
+        "(inbound and udp.SrcPort == %d)",
+        DNS_PORT);
 
     if (r < 0 || r >= sizeof(filter)) {
         error("failed to create filter string");
@@ -112,11 +101,7 @@ UINT32 intercept_packets_loop() {
             continue;
         }
 
-        if(tcp_header) {
-
-            /*UINT32 result =*/ handle_tcp_packet(&addr, ip_header, tcp_header, packet, packet_len);
-
-        } else if (udp_header) {
+        if (udp_header) {
             /*UINT32 result =*/ handle_udp_packet(&addr, ip_header, udp_header, packet, packet_len, payload, payload_len);
         }
 
@@ -147,27 +132,6 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
             WinDivertSend(handle, packet, packet_len, NULL, addr);
         }
         return 0;
-    } else if (addr->Outbound && ntohs(udp_header->DstPort) == HTTPS_PORT) {        //QUIC protocol outbound
-
-        udp_header->DstPort = htons(PROXY_PORT);
-        WinDivertHelperCalcChecksums(packet, packet_len, NULL, 0);
-
-        if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
-            VPRINT(1, "failed to send rewritten outbound UDP packet\n");
-            return -1;
-        }
-        return 0;
-
-    } else if (!addr->Outbound && ntohs(udp_header->SrcPort) == PROXY_PORT) {       //QUIC protocol inbound
-        udp_header->SrcPort = htons(HTTPS_PORT);
-        WinDivertHelperCalcChecksums(packet, packet_len, NULL, 0);
-
-        if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
-            VPRINT(1, "failed to send rewritten outbound UDP packet\n");
-            return -1;
-        }
-        return 0;
-
     }
 
     // Just, forward if anything else.
@@ -175,34 +139,6 @@ UINT32 handle_udp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR i
     if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
         VPRINT(1, "failed to send rewritten inbound packet\n");
         return -1;
-    }
-
-    return 0;
-
-}
-
-UINT32 handle_tcp_packet(const PWINDIVERT_ADDRESS addr, const PWINDIVERT_IPHDR ip_header, 
-    const PWINDIVERT_TCPHDR tcp_header, UINT8 *packet, UINT packet_len) 
-{
-    if (addr->Outbound && ntohs(tcp_header->DstPort) == HTTPS_PORT) {        //HTTPS protocol outbound
-
-        tcp_header->DstPort = htons(PROXY_PORT);
-        WinDivertHelperCalcChecksums(packet, packet_len, NULL, 0);
-
-        if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
-            VPRINT(1, "failed to send rewritten outbound UDP packet\n");
-            return -1;
-        }
-
-    } else if (!addr->Outbound && ntohs(tcp_header->SrcPort) == PROXY_PORT) {   //HTTPS protocol inbound
-        tcp_header->SrcPort = htons(HTTPS_PORT);
-        WinDivertHelperCalcChecksums(packet, packet_len, NULL, 0);
-
-        if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
-            VPRINT(1, "failed to send rewritten outbound UDP packet\n");
-            return -1;
-        }
-
     }
 
     return 0;
