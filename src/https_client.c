@@ -210,7 +210,7 @@ int send_heartbeat() {
     char os_version[128];
     char logged_users[UNLEN + 1];
     char ip_addresses[512];
-    const char *agent_version = "1.0.0";
+    const char *agent_version = AGENT_VERSION;
 
     // Gather system info
     get_computer_name(computer_name, sizeof(computer_name));

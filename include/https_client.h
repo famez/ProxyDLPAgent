@@ -9,6 +9,8 @@
 
 #define PROXYDLP_CA_FILE        "C:\\Program Files\\ProxyDLPAgent\\mitmCA.pem"
 
+#define AGENT_VERSION           "1.2.0"
+
 
 int register_agent();
 int deregister_agent();
