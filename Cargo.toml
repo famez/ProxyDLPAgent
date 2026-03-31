@@ -1,0 +1,31 @@
+[package]
+name = "proxydlp-agent"
+version = "1.2.0"
+edition = "2021"
+
+[[bin]]
+name = "proxydlp"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+simplelog = "0.12"
+anyhow = "1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows-service = "0.7"
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinInet",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
