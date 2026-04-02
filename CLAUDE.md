@@ -8,6 +8,71 @@ Companion server: https://github.com/famez/ProxyDLP
 
 ---
 
+## Companion server (ProxyDLP)
+
+Source: https://github.com/famez/ProxyDLP
+
+### Overview
+
+Node.js (Express) + MongoDB application with two personas:
+
+- **Web console** (ports 80/443 → 8443): dashboard for viewing intercepted traffic, managing detection rules, monitored domains, users, and statistics.
+- **Agent API** (port 4443): REST API consumed exclusively by this agent. The `/api/agent/` prefix returns 403 on port 8443 — agents must always use port **4443**.
+
+A `mitmproxy`-based service intercepts HTTPS traffic on port **8080**, decrypts it with a self-signed CA, inspects it against configured rules, and logs events to MongoDB.
+
+### Agent API endpoints
+
+Base URL: `https://<PROXY_HOSTNAME>:4443`
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| `GET` | `/healthcheck` | No | Returns `"OK"` |
+| `GET` | `/register` | No | Returns `{ guid, token }` |
+| `GET` | `/monitored_domains` | Yes | query: `?guid=` — returns `{ domains: string[] }` |
+| `POST` | `/heartbeat` | Yes | body: `{ guid, computer_name, os_version, user, ip_addresses, agent_version, monitored_domains }` |
+| `GET` | `/deregister` | Yes | query: `?guid=` |
+
+### Authentication
+
+All authenticated endpoints require:
+- `Authorization: Bearer <raw_token>` header
+- `guid` as query param (GET) or JSON body field (POST)
+
+The server looks up the agent by `guid` in the `agents` MongoDB collection and verifies the token with `bcrypt.compare` (12 salt rounds). There is no JWT or expiry — the token is valid until deregistration.
+
+### Token lifecycle
+
+1. Agent calls `GET /register` → server generates a 96-char hex token (`crypto.randomBytes(48)`), stores it hashed (bcrypt), returns `{ guid, token }` plaintext.
+2. Agent persists `guid` and `token` in `HKLM\SOFTWARE\ProxyDlp`.
+3. All subsequent requests use `Authorization: Bearer <token>` + `guid`.
+4. No rotation mechanism — token lives until `GET /deregister` is called.
+
+### Monitored domains
+
+`GET /monitored_domains` reads the `sites` MongoDB collection, flattens the `urls` arrays of all site documents, strips paths (keeps only the domain part), deduplicates, and returns the list. This list is what the agent uses to generate the PAC file.
+
+### Deployment
+
+```bash
+./generate_secrets.sh <proxy-hostname>
+docker-compose up
+```
+
+`generate_secrets.sh` creates `.env` with secrets, generates the mitmproxy CA (4096-bit RSA), and signs the nginx TLS cert with it. The CA public cert (`mitmCA.pem`) must be installed on the agent machine at `C:\Program Files\ProxyDLPAgent\mitmCA.pem` so that rustls can verify the server's TLS certificate.
+
+### Key services
+
+| Service | Role | Port |
+|---------|------|------|
+| `nginx-server` | TLS termination + reverse proxy | 80, 443, 4443 |
+| `web-console` | Node.js app | internal :3000 |
+| `mongo` | MongoDB (`ProxyDLP` database) | internal |
+| `proxy` | mitmproxy replicas (2–10) | internal :8080 |
+| `haproxy` | Load-balances proxy replicas | 8080 |
+
+---
+
 ## Build
 
 ```bash
