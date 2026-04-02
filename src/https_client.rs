@@ -3,7 +3,7 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const AGENT_VERSION: &str = "1.2.0";
+const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Path to the custom CA certificate used to verify the DLP proxy's TLS cert.
 const CA_CERT_PATH: &str = r"C:\Program Files\ProxyDLPAgent\mitmCA.pem";
