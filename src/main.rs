@@ -63,7 +63,9 @@ fn run_as_windows_service(_arguments: Vec<OsString>) -> Result<()> {
     })?;
 
     // Build a tokio runtime and run the agent inside it.
-    let rt = tokio::runtime::Runtime::new()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     rt.block_on(async move {
@@ -102,7 +104,9 @@ fn main() -> Result<()> {
     // Handle the `/deregister` command-line flag.
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1].eq_ignore_ascii_case("/deregister") {
-        let rt = tokio::runtime::Runtime::new()?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
         return rt.block_on(deregister_and_exit());
     }
 
@@ -114,7 +118,9 @@ fn main() -> Result<()> {
 
     // Interactive / debug mode.
     info!("Running in interactive mode");
-    let rt = tokio::runtime::Runtime::new()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     rt.block_on(async move {
