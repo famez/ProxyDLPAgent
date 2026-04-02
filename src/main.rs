@@ -145,7 +145,7 @@ fn main() -> Result<()> {
 /// Main agent lifecycle: register, fetch domains, install PAC, run heartbeat.
 async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     // Remove stale logs on each start.
-    let _ = std::fs::remove_file(r"C:\trace.log");
+    // Log file is kept across restarts to aid debugging.
 
     info!("ProxyDLP Agent v1.2.0 starting");
 
@@ -246,7 +246,9 @@ async fn deregister_and_exit() -> Result<()> {
 
 /// Initialise file-based logging (mirrors the original C `tracelog.h` behaviour).
 fn init_logging() {
-    let log_path = r"C:\trace.log";
+    let log_dir = r"C:\ProgramData\ProxyDLPAgent";
+    let log_path = r"C:\ProgramData\ProxyDLPAgent\trace.log";
+    let _ = std::fs::create_dir_all(log_dir);
     match File::create(log_path) {
         Ok(file) => {
             let _ = WriteLogger::init(LevelFilter::Info, LogConfig::default(), file);

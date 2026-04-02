@@ -66,7 +66,7 @@ The agent is purely I/O-bound. The runtime is built with `Builder::new_current_t
 | Heartbeat interval | `120 s` | `heartbeat.rs` |
 | CA cert path | `C:\Program Files\ProxyDLPAgent\mitmCA.pem` | `https_client.rs` |
 | PAC file path | `C:\ProgramData\ProxyDLPAgent\proxy.pac` | `proxy_config.rs` |
-| Log file | `C:\trace.log` | `main.rs` |
+| Log file | `C:\ProgramData\ProxyDLPAgent\trace.log` | `main.rs` |
 | Registry key | `HKLM\SOFTWARE\ProxyDlp` | `config.rs` |
 
 ---
