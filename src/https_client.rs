@@ -104,7 +104,8 @@ pub async fn deregister_agent(proxy_hostname: &str, guid: &str, token: &str) -> 
 /// Fetch the list of domains the agent should route through the proxy.
 pub async fn get_monitored_domains(proxy_hostname: &str, token: &str) -> Result<Vec<String>> {
     let client = build_client()?;
-    let url = format!("{}/{MON_URLS_ENDPOINT}", base_url(proxy_hostname));
+    let guid = crate::config::get_guid().unwrap_or_default();
+    let url = format!("{}/{MON_URLS_ENDPOINT}?guid={guid}", base_url(proxy_hostname));
 
     let resp = client
         .get(&url)
