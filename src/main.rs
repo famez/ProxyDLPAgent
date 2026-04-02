@@ -147,7 +147,7 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     // Remove stale logs on each start.
     // Log file is kept across restarts to aid debugging.
 
-    info!("ProxyDLP Agent v1.2.0 starting");
+    info!("ProxyDLP Agent v{} starting", env!("CARGO_PKG_VERSION"));
 
     // ── Load persisted configuration ────────────────────────────────────────
     let already_registered = config::load_from_registry();
