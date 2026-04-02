@@ -171,21 +171,9 @@ pub async fn send_heartbeat(
     Ok(())
 }
 
-/// Resolve a hostname to its first IPv4 address string.
-pub fn resolve_hostname(hostname: &str) -> Option<String> {
-    use std::net::ToSocketAddrs;
-    let addr_str = format!("{hostname}:80");
-    addr_str
-        .to_socket_addrs()
-        .ok()?
-        .find(|a| a.is_ipv4())
-        .map(|a| a.ip().to_string())
-}
-
 // ─── System info helpers ──────────────────────────────────────────────────────
 
 mod sys_info {
-    use log::warn;
 
     pub fn computer_name() -> String {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
@@ -255,17 +243,16 @@ mod sys_info {
             let ret = GetAdaptersInfo(Some(buf.as_mut_ptr() as *mut IP_ADAPTER_INFO), &mut buf_size);
 
             // ERROR_BUFFER_OVERFLOW (111) means our buffer was too small.
-            if ret.0 == 111 {
+            if ret == 111 {
                 buf = vec![0u8; buf_size as usize];
                 if GetAdaptersInfo(
                     Some(buf.as_mut_ptr() as *mut IP_ADAPTER_INFO),
                     &mut buf_size,
-                )
-                .is_err()
+                ) != 0
                 {
                     return String::new();
                 }
-            } else if ret.is_err() {
+            } else if ret != 0 {
                 return String::new();
             }
 

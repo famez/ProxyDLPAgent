@@ -10,7 +10,7 @@
 ///   4. Configure the Windows proxy settings (HKCU + HKLM policy) to use the PAC file.
 ///   5. Notify WinInet so running browsers pick up the change immediately.
 use anyhow::Result;
-use log::{error, info};
+use log::info;
 use std::{fs, path::Path};
 
 #[cfg(windows)]

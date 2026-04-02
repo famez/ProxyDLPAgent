@@ -11,7 +11,6 @@ pub struct Config {
     pub guid: Option<String>,
     pub token: Option<String>,
     pub proxy_hostname: Option<String>,
-    pub proxy_ip: Option<String>,
 }
 
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
@@ -28,24 +27,12 @@ pub fn get_proxy_hostname() -> Option<String> {
     CONFIG.lock().unwrap().proxy_hostname.clone()
 }
 
-pub fn get_proxy_ip() -> Option<String> {
-    CONFIG.lock().unwrap().proxy_ip.clone()
-}
-
 pub fn set_guid(guid: &str) {
     CONFIG.lock().unwrap().guid = Some(guid.to_string());
 }
 
 pub fn set_token(token: &str) {
     CONFIG.lock().unwrap().token = Some(token.to_string());
-}
-
-pub fn set_proxy_hostname(hostname: &str) {
-    CONFIG.lock().unwrap().proxy_hostname = Some(hostname.to_string());
-}
-
-pub fn set_proxy_ip(ip: &str) {
-    CONFIG.lock().unwrap().proxy_ip = Some(ip.to_string());
 }
 
 /// Load configuration from the Windows registry.
