@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build (cross-compile Windows release)",
+            "type": "shell",
+            "command": "cargo build --release --target x86_64-pc-windows-gnu",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$rustc"
+        },
+        {
+            "label": "Build (cross-compile Windows debug)",
+            "type": "shell",
+            "command": "cargo build --target x86_64-pc-windows-gnu",
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$rustc"
+        }
+    ]
+}
