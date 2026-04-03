@@ -183,25 +183,7 @@ pub async fn run_pac_http_server(mut shutdown_rx: watch::Receiver<bool>) {
 
 #[cfg(windows)]
 fn set_system_proxy_pac(pac_url: &str) -> Result<()> {
-    const INET_SETTINGS: &str =
-        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-    // Per-user (current session / interactive login).
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    match hkcu.create_subkey(INET_SETTINGS) {
-        Ok((key, disp)) => {
-            debug!("HKCU\\{INET_SETTINGS} opened ({disp:?})");
-            match key.set_value("AutoConfigURL", &pac_url.to_string()) {
-                Ok(_) => debug!("HKCU AutoConfigURL written: {pac_url}"),
-                Err(e) => warn!("HKCU AutoConfigURL write failed: {e}"),
-            }
-            match key.set_value("ProxyEnable", &0u32) {
-                Ok(_) => debug!("HKCU ProxyEnable set to 0"),
-                Err(e) => warn!("HKCU ProxyEnable write failed: {e}"),
-            }
-        }
-        Err(e) => warn!("Failed to open HKCU\\{INET_SETTINGS}: {e}"),
-    }
-
+    apply_proxy_to_all_profiles(pac_url, true);
     notify_wininet_proxy_change();
     info!("WinInet proxy set to PAC: {pac_url}");
     Ok(())
@@ -214,24 +196,7 @@ fn set_system_proxy_pac(_pac_url: &str) -> Result<()> {
 
 #[cfg(windows)]
 fn clear_system_proxy() -> Result<()> {
-    const INET_SETTINGS: &str =
-        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-    const POLICY_PATH: &str =
-        r"SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings";
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok((key, _)) = hkcu.create_subkey(INET_SETTINGS) {
-        let _ = key.delete_value("AutoConfigURL");
-        let _ = key.set_value("ProxyEnable", &0u32);
-        debug!("HKCU proxy settings cleared");
-    }
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok((policy_key, _)) = hklm.create_subkey(POLICY_PATH) {
-        let _ = policy_key.delete_value("AutoConfigUrl");
-        debug!("HKLM policy proxy settings cleared");
-    }
-
+    apply_proxy_to_all_profiles("", false);
     notify_wininet_proxy_change();
     info!("WinInet proxy settings cleared");
     Ok(())
@@ -240,6 +205,116 @@ fn clear_system_proxy() -> Result<()> {
 #[cfg(not(windows))]
 fn clear_system_proxy() -> Result<()> {
     Ok(())
+}
+
+/// Apply or clear `AutoConfigURL` for every user profile on the machine.
+///
+/// Enumerates `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`
+/// to obtain all user SIDs (including users not currently logged in).
+/// For each SID:
+///   - If the hive is already loaded in `HKEY_USERS` (user is logged in), write directly.
+///   - Otherwise, temporarily load `NTUSER.DAT` via `RegLoadKeyW`, write, then unload.
+///
+/// `set` = true  → write `AutoConfigURL = pac_url` and `ProxyEnable = 0`.
+/// `set` = false → delete `AutoConfigURL` and set `ProxyEnable = 0`.
+#[cfg(windows)]
+fn apply_proxy_to_all_profiles(pac_url: &str, set: bool) {
+    use std::collections::HashSet;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegLoadKeyW, RegUnLoadKeyW, HKEY_USERS};
+
+    const INET_SETTINGS: &str =
+        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    const PROFILE_LIST: &str =
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+    // SIDs of built-in system/service accounts — never touch these.
+    const SKIP_SIDS: &[&str] = &[".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"];
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let profile_list = match hklm.open_subkey(PROFILE_LIST) {
+        Ok(k) => k,
+        Err(e) => { warn!("ProfileList open failed: {e}"); return; }
+    };
+
+    let hku = RegKey::predef(HKEY_USERS);
+
+    // Collect currently-loaded hives so we know which ones need RegLoadKeyW.
+    let loaded: HashSet<String> = hku.enum_keys().filter_map(|r| r.ok()).collect();
+
+    for sid in profile_list.enum_keys().filter_map(|r| r.ok()) {
+        if SKIP_SIDS.contains(&sid.as_str()) || sid.ends_with("_Classes") {
+            debug!("Skipping profile SID: {sid}");
+            continue;
+        }
+
+        let already_loaded = loaded.contains(&sid);
+
+        // For users not currently logged in, load their NTUSER.DAT temporarily.
+        if !already_loaded {
+            let profile_key = match profile_list.open_subkey(&sid) {
+                Ok(k) => k,
+                Err(e) => { warn!("Cannot open ProfileList\\{sid}: {e}"); continue; }
+            };
+            // ProfileImagePath may contain REG_EXPAND_SZ — winreg expands it automatically.
+            let profile_path: String = match profile_key.get_value("ProfileImagePath") {
+                Ok(p) => p,
+                Err(e) => { warn!("No ProfileImagePath for {sid}: {e}"); continue; }
+            };
+            let ntuser_dat = format!(r"{profile_path}\NTUSER.DAT");
+
+            let subkey_wide: Vec<u16> = std::ffi::OsStr::new(&sid)
+                .encode_wide().chain(std::iter::once(0)).collect();
+            let file_wide: Vec<u16> = std::ffi::OsStr::new(&ntuser_dat)
+                .encode_wide().chain(std::iter::once(0)).collect();
+
+            let load_ok = unsafe {
+                RegLoadKeyW(
+                    HKEY_USERS,
+                    PCWSTR(subkey_wide.as_ptr()),
+                    PCWSTR(file_wide.as_ptr()),
+                ).is_ok()
+            };
+
+            if !load_ok {
+                warn!("RegLoadKeyW failed for {sid} ({ntuser_dat})");
+                continue;
+            }
+            debug!("Loaded hive for {sid} from {ntuser_dat}");
+        }
+
+        // Write or clear proxy settings.
+        let inet_path = format!(r"{sid}\{INET_SETTINGS}");
+        match hku.create_subkey(&inet_path) {
+            Ok((key, _)) => {
+                if set {
+                    match key.set_value("AutoConfigURL", &pac_url.to_string()) {
+                        Ok(_) => debug!("HKU\\{sid} AutoConfigURL written"),
+                        Err(e) => warn!("HKU\\{sid} AutoConfigURL write failed: {e}"),
+                    }
+                    match key.set_value("ProxyEnable", &0u32) {
+                        Ok(_) => debug!("HKU\\{sid} ProxyEnable set to 0"),
+                        Err(e) => warn!("HKU\\{sid} ProxyEnable write failed: {e}"),
+                    }
+                } else {
+                    let _ = key.delete_value("AutoConfigURL");
+                    let _ = key.set_value("ProxyEnable", &0u32);
+                    debug!("HKU\\{sid} proxy settings cleared");
+                }
+            }
+            Err(e) => warn!("HKU\\{sid}\\Internet Settings open failed: {e}"),
+        }
+
+        // Unload hives we loaded temporarily.
+        if !already_loaded {
+            let subkey_wide: Vec<u16> = std::ffi::OsStr::new(&sid)
+                .encode_wide().chain(std::iter::once(0)).collect();
+            unsafe {
+                let _ = RegUnLoadKeyW(HKEY_USERS, PCWSTR(subkey_wide.as_ptr()));
+            }
+            debug!("Unloaded hive for {sid}");
+        }
+    }
 }
 
 #[cfg(windows)]
