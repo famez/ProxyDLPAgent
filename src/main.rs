@@ -185,6 +185,10 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
 
     proxy_config::install_pac_file(&domains, &proxy_hostname, proxy_config::PROXY_PORT)?;
 
+    // ── Start PAC HTTP server task ───────────────────────────────────────────
+    let pac_rx = shutdown_rx.clone();
+    let pac_handle = tokio::spawn(proxy_config::run_pac_http_server(pac_rx));
+
     // ── Start heartbeat task ─────────────────────────────────────────────────
     let hb_rx = shutdown_rx.clone();
     let hb_handle = tokio::spawn(heartbeat::run(
@@ -198,6 +202,7 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let mut rx = shutdown_rx;
     let _ = rx.changed().await;
 
+    pac_handle.abort();
     hb_handle.abort();
 
     // Clean up: remove PAC file so traffic returns to direct connections.
@@ -251,7 +256,7 @@ fn init_logging() {
     let _ = std::fs::create_dir_all(log_dir);
     match File::create(log_path) {
         Ok(file) => {
-            let _ = WriteLogger::init(LevelFilter::Info, LogConfig::default(), file);
+            let _ = WriteLogger::init(LevelFilter::Debug, LogConfig::default(), file);
         }
         Err(_) => {
             // If we cannot open the log file (e.g., during tests), fall back silently.
