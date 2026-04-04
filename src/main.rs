@@ -180,14 +180,10 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let token = config::get_token()
         .ok_or_else(|| anyhow::anyhow!("No auth token available"))?;
 
-    // ── Fetch monitored domains and install PAC file ─────────────────────────
+    // ── Fetch monitored domains and update hosts file ────────────────────────
     let domains = https_client::get_monitored_domains(&proxy_hostname, &token).await?;
 
-    proxy_config::install_pac_file(&domains, &proxy_hostname, proxy_config::PROXY_PORT)?;
-
-    // ── Start PAC HTTP server task ───────────────────────────────────────────
-    let pac_rx = shutdown_rx.clone();
-    let pac_handle = tokio::spawn(proxy_config::run_pac_http_server(pac_rx));
+    proxy_config::install_hosts(&domains, &proxy_hostname)?;
 
     // ── Start heartbeat task ─────────────────────────────────────────────────
     let hb_rx = shutdown_rx.clone();
@@ -202,12 +198,11 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let mut rx = shutdown_rx;
     let _ = rx.changed().await;
 
-    pac_handle.abort();
     hb_handle.abort();
 
-    // Clean up: remove PAC file so traffic returns to direct connections.
-    if let Err(e) = proxy_config::remove_pac_file() {
-        warn!("Failed to remove PAC file on shutdown: {e}");
+    // Clean up: remove hosts entries so traffic returns to direct connections.
+    if let Err(e) = proxy_config::remove_hosts() {
+        warn!("Failed to remove hosts entries on shutdown: {e}");
     }
 
     info!("Agent stopped");
@@ -244,8 +239,8 @@ async fn deregister_and_exit() -> Result<()> {
         warn!("No stored credentials – nothing to deregister");
     }
 
-    // Remove PAC file if present.
-    let _ = proxy_config::remove_pac_file();
+    // Remove hosts entries if present.
+    let _ = proxy_config::remove_hosts();
     Ok(())
 }
 
