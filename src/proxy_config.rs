@@ -222,7 +222,7 @@ fn apply_proxy_to_all_profiles(pac_url: &str, set: bool) {
     use std::collections::HashSet;
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
-    use windows::Win32::System::Registry::{RegLoadKeyW, RegUnLoadKeyW, HKEY_USERS};
+    use windows::Win32::System::Registry::{RegLoadKeyW, RegUnLoadKeyW, HKEY_USERS as WIN32_HKEY_USERS};
 
     const INET_SETTINGS: &str =
         r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
@@ -270,7 +270,7 @@ fn apply_proxy_to_all_profiles(pac_url: &str, set: bool) {
 
             let load_ok = unsafe {
                 RegLoadKeyW(
-                    HKEY_USERS,
+                    WIN32_HKEY_USERS,
                     PCWSTR(subkey_wide.as_ptr()),
                     PCWSTR(file_wide.as_ptr()),
                 ).is_ok()
@@ -310,7 +310,7 @@ fn apply_proxy_to_all_profiles(pac_url: &str, set: bool) {
             let subkey_wide: Vec<u16> = std::ffi::OsStr::new(&sid)
                 .encode_wide().chain(std::iter::once(0)).collect();
             unsafe {
-                let _ = RegUnLoadKeyW(HKEY_USERS, PCWSTR(subkey_wide.as_ptr()));
+                let _ = RegUnLoadKeyW(WIN32_HKEY_USERS, PCWSTR(subkey_wide.as_ptr()));
             }
             debug!("Unloaded hive for {sid}");
         }
