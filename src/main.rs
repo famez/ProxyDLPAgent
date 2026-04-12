@@ -189,6 +189,15 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let pac_rx = shutdown_rx.clone();
     let pac_handle = tokio::spawn(proxy_config::run_pac_http_server(pac_rx));
 
+    // ── Start proxy configuration monitor task ───────────────────────────────
+    let monitor_rx = shutdown_rx.clone();
+    let monitor_handle = tokio::spawn(proxy_config::run_proxy_monitor(
+        domains.clone(),
+        proxy_hostname.clone(),
+        proxy_config::PROXY_PORT,
+        monitor_rx,
+    ));
+
     // ── Start heartbeat task ─────────────────────────────────────────────────
     let hb_rx = shutdown_rx.clone();
     let hb_handle = tokio::spawn(heartbeat::run(
@@ -203,6 +212,7 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let _ = rx.changed().await;
 
     pac_handle.abort();
+    monitor_handle.abort();
     hb_handle.abort();
 
     // Clean up: remove PAC file so traffic returns to direct connections.
