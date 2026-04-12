@@ -15,7 +15,7 @@
 ///   7. Notify WinInet so running browsers pick up the change immediately.
 use anyhow::Result;
 use log::{debug, error, info, warn};
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
 use tokio::sync::watch;
 
 #[cfg(windows)]
@@ -28,6 +28,9 @@ pub const PROXY_PORT: u16 = 8080;
 
 /// Port on which the local PAC HTTP server listens.
 pub const PAC_HTTP_PORT: u16 = 8087;
+
+/// How often the proxy monitor checks for unauthorised configuration changes.
+const PROXY_MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Local path where the generated PAC file is written.
 pub const PAC_FILE_PATH: &str = r"C:\ProgramData\ProxyDLPAgent\proxy.pac";
@@ -177,6 +180,111 @@ pub async fn run_pac_http_server(mut shutdown_rx: watch::Receiver<bool>) {
             }
         }
     }
+}
+
+// ─── Proxy configuration monitor ─────────────────────────────────────────────
+
+/// Async task: periodically checks whether the proxy configuration has been
+/// modified outside the agent and restores it if necessary.
+///
+/// Checks performed every `PROXY_MONITOR_INTERVAL`:
+///   - PAC file exists on disk.
+///   - `AutoConfigURL` in every currently-loaded user hive matches `PAC_FILE_URL`.
+///
+/// If any discrepancy is found, `install_pac_file` is called immediately to
+/// reapply the authoritative settings received from the server.
+///
+/// Runs until `shutdown_rx` signals true.
+pub async fn run_proxy_monitor(
+    domains: Vec<String>,
+    proxy_hostname: String,
+    proxy_port: u16,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let mut ticker = tokio::time::interval(PROXY_MONITOR_INTERVAL);
+    ticker.tick().await; // consume the immediate first tick
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                if proxy_settings_changed() {
+                    warn!("Proxy configuration changed externally — restoring");
+                    if let Err(e) = install_pac_file(&domains, &proxy_hostname, proxy_port) {
+                        error!("Failed to restore proxy configuration: {e}");
+                    } else {
+                        info!("Proxy configuration restored successfully");
+                    }
+                } else {
+                    debug!("Proxy monitor check: configuration intact");
+                }
+            }
+            result = shutdown_rx.changed() => {
+                if result.is_err() || *shutdown_rx.borrow() {
+                    info!("Proxy monitor stopping");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Returns `true` if the agent-managed proxy configuration appears to have been
+/// modified by an external actor.
+///
+/// On Windows, checks:
+///   1. The PAC file is present on disk.
+///   2. `AutoConfigURL` in every currently-loaded user hive equals `PAC_FILE_URL`.
+///
+/// On non-Windows platforms, always returns `false`.
+#[cfg(windows)]
+fn proxy_settings_changed() -> bool {
+    use winreg::{enums::*, RegKey};
+
+    const INET_SETTINGS: &str =
+        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    const SKIP_SIDS: &[&str] = &[".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"];
+
+    // 1. PAC file on disk.
+    if !Path::new(PAC_FILE_PATH).exists() {
+        warn!("Proxy monitor: PAC file missing from disk ({PAC_FILE_PATH})");
+        return true;
+    }
+
+    // 2. AutoConfigURL for each currently-loaded user hive.
+    let hku = RegKey::predef(HKEY_USERS);
+    for sid in hku.enum_keys().filter_map(|r| r.ok()) {
+        if SKIP_SIDS.contains(&sid.as_str()) || sid.ends_with("_Classes") {
+            continue;
+        }
+
+        let inet_path = format!(r"{sid}\{INET_SETTINGS}");
+        if let Ok(key) = hku.open_subkey(&inet_path) {
+            let current_url: Result<String, _> = key.get_value("AutoConfigURL");
+            match current_url {
+                Ok(ref url) if url == PAC_FILE_URL => {
+                    debug!("Proxy monitor: HKU\\{sid} AutoConfigURL OK");
+                }
+                Ok(url) => {
+                    warn!(
+                        "Proxy monitor: HKU\\{sid} AutoConfigURL changed \
+                         (expected \"{PAC_FILE_URL}\", found \"{url}\")"
+                    );
+                    return true;
+                }
+                Err(_) => {
+                    warn!("Proxy monitor: HKU\\{sid} AutoConfigURL missing");
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(not(windows))]
+fn proxy_settings_changed() -> bool {
+    false
 }
 
 // ─── WinInet registry + notification ─────────────────────────────────────────
@@ -477,5 +585,13 @@ mod tests {
         let pac = generate_pac_content(&[], "proxy.host", 8080);
         assert!(pac.contains("return \"PROXY proxy.host:8080\""));
         assert!(!pac.contains("DIRECT"));
+    }
+
+    /// On non-Windows, `proxy_settings_changed` must always return false
+    /// (there is nothing to check, so no spurious restore should be triggered).
+    #[cfg(not(windows))]
+    #[test]
+    fn proxy_settings_unchanged_on_non_windows() {
+        assert!(!proxy_settings_changed());
     }
 }
