@@ -180,21 +180,18 @@ async fn run_agent(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let token = config::get_token()
         .ok_or_else(|| anyhow::anyhow!("No auth token available"))?;
 
-    // ── Fetch monitored domains and install PAC file ─────────────────────────
-    let domains = https_client::get_monitored_domains(&proxy_hostname, &token).await?;
-
-    proxy_config::install_pac_file(&domains, &proxy_hostname, proxy_config::PROXY_PORT)?;
-
     // ── Start PAC HTTP server task ───────────────────────────────────────────
     let pac_rx = shutdown_rx.clone();
     let pac_handle = tokio::spawn(proxy_config::run_pac_http_server(pac_rx));
 
     // ── Start heartbeat task ─────────────────────────────────────────────────
+    // The heartbeat sends telemetry to the server and receives the current list
+    // of monitored domains in the response.  The PAC file is installed/refreshed
+    // by the heartbeat task whenever the domain list changes.
     let hb_rx = shutdown_rx.clone();
     let hb_handle = tokio::spawn(heartbeat::run(
         proxy_hostname.clone(),
         token.clone(),
-        domains.clone(),
         hb_rx,
     ));
 
