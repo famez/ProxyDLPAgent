@@ -12,7 +12,6 @@ const CA_CERT_PATH: &str = r"C:\Program Files\ProxyDLPAgent\mitmCA.pem";
 const REGISTER_ENDPOINT: &str = "register";
 const DEREGISTER_ENDPOINT: &str = "deregister";
 const HEARTBEAT_ENDPOINT: &str = "heartbeat";
-const MON_URLS_ENDPOINT: &str = "monitored_domains";
 const HEALTHCHECK_ENDPOINT: &str = "healthcheck";
 
 // ─── JSON types ──────────────────────────────────────────────────────────────
@@ -24,7 +23,7 @@ struct RegisterResponse {
 }
 
 #[derive(Deserialize)]
-struct MonitoredDomainsResponse {
+struct HeartbeatResponse {
     domains: Vec<String>,
 }
 
@@ -101,30 +100,6 @@ pub async fn deregister_agent(proxy_hostname: &str, guid: &str, token: &str) -> 
     Ok(())
 }
 
-/// Fetch the list of domains the agent should route through the proxy.
-pub async fn get_monitored_domains(proxy_hostname: &str, token: &str) -> Result<Vec<String>> {
-    let client = build_client()?;
-    let guid = crate::config::get_guid().unwrap_or_default();
-    let url = format!("{}/{MON_URLS_ENDPOINT}?guid={guid}", base_url(proxy_hostname));
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        return Err(anyhow!(
-            "Failed to fetch monitored domains: HTTP {}",
-            resp.status()
-        ));
-    }
-
-    let body: MonitoredDomainsResponse = resp.json().await?;
-    info!("Received {} domain(s) to monitor", body.domains.len());
-    Ok(body.domains)
-}
-
 /// Return `true` if the proxy's health-check endpoint responds with HTTP 200.
 pub async fn check_proxy_healthy(proxy_hostname: &str) -> bool {
     let Ok(client) = build_client() else {
@@ -138,11 +113,12 @@ pub async fn check_proxy_healthy(proxy_hostname: &str) -> bool {
 }
 
 /// Send a heartbeat with system telemetry to the DLP server.
+/// Returns the updated list of monitored domains from the server response.
 pub async fn send_heartbeat(
     proxy_hostname: &str,
     token: &str,
     monitored_domains: &[String],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let client = build_client()?;
     let url = format!("{}/{HEARTBEAT_ENDPOINT}", base_url(proxy_hostname));
 
@@ -168,8 +144,14 @@ pub async fn send_heartbeat(
     if !resp.status().is_success() {
         return Err(anyhow!("Heartbeat rejected: HTTP {}", resp.status()));
     }
-    info!("Heartbeat sent (domains: {})", monitored_domains.len());
-    Ok(())
+
+    let body: HeartbeatResponse = resp.json().await?;
+    info!(
+        "Heartbeat sent (sent: {}, received: {} domain(s))",
+        monitored_domains.len(),
+        body.domains.len()
+    );
+    Ok(body.domains)
 }
 
 // ─── System info helpers ──────────────────────────────────────────────────────
